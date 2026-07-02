@@ -1,0 +1,160 @@
+/* ─── Animated Background Orbs ─── */
+.bg-scene {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.35;
+}
+
+.orb-1 {
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.5), transparent 70%);
+  top: -10%;
+  left: -5%;
+  animation: orbFloat1 20s ease-in-out infinite;
+}
+
+.orb-2 {
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(236, 72, 153, 0.4), transparent 70%);
+  top: 50%;
+  right: -8%;
+  animation: orbFloat2 25s ease-in-out infinite;
+}
+
+.orb-3 {
+  width: 350px;
+  height: 350px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.3), transparent 70%);
+  bottom: -5%;
+  left: 30%;
+  animation: orbFloat3 22s ease-in-out infinite;
+}
+
+/* ─── Gradient Text ─── */
+.gradient-text {
+  background: linear-gradient(135deg, #a78bfa, #ec4899, #8b5cf6);
+  background-size: 200% 200%;
+  animation: gradientShift 5s ease infinite;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Glass Card ─── */
+.glass-card {
+  background: rgba(15, 15, 40, 0.55);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* ─── Subtle glass for inner cards ─── */
+.glass-inner {
+  background: rgba(20, 20, 50, 0.5);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ─── Floating animation ─── */
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* ─── Fade in up ─── */
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s ease-out forwards;
+}
+
+/* ─── Fade in ─── */
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+/* ─── Spinner ─── */
+.spinner {
+  width: 44px;
+  height: 44px;
+  border: 3px solid rgba(255, 255, 255, 0.08);
+  border-top-color: #8b5cf6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* ─── Pulse text ─── */
+.animate-pulse-text {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* ─── Gradient button ─── */
+.gradient-btn {
+  background: linear-gradient(135deg, #8b5cf6, #ec4899);
+  position: relative;
+  overflow: hidden;
+}
+
+.gradient-btn::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+/* ─── Card accent hover line ─── */
+.card-accent {
+  position: relative;
+  overflow: hidden;
+}
+
+.card-accent::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #8b5cf6, #ec4899, #3b82f6);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.card-accent:hover::before {
+  opacity: 1;
+}
+
+/* ─── Input glow on focus ─── */
+.input-glow:focus {
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow:
+    0 0 0 3px rgba(139, 92, 246, 0.12),
+    0 0 30px rgba(139, 92, 246, 0.08);
+}
+
+/* ─── Grid lines overlay (very subtle) ─── */
+.grid-overlay {
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 60px 60px;
+  pointer-events: none;
+  z-index: 0;
+}

@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-primary: #050510;
+  --color-bg-secondary: #0c0c1d;
+  --color-bg-card: rgba(20, 20, 45, 0.6);
+  --color-bg-card-hover: rgba(30, 30, 55, 0.7);
+  --color-bg-card-solid: #141430;
+  --color-bg-input: rgba(15, 15, 35, 0.8);
+  --color-border: rgba(255, 255, 255, 0.06);
+  --color-border-glow: rgba(139, 92, 246, 0.4);
+  --color-glass: rgba(255, 255, 255, 0.03);
+  --color-txt-primary: #f0f0f5;
+  --color-txt-secondary: #9090b0;
+  --color-txt-muted: #5c5c74;
+  --color-accent-purple: #8b5cf6;
+  --color-accent-purple-light: #a78bfa;
+  --color-accent-pink: #ec4899;
+  --color-accent-blue: #3b82f6;
+  --color-accent-cyan: #06b6d4;
+  --color-accent-green: #10b981;
+  --color-accent-red: #ef4444;
+  --color-accent-yellow: #eab308;
+  --font-family-inter: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family-inter);
+  background: var(--color-bg-primary);
+  color: var(--color-txt-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--color-bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--color-accent-purple); border-radius: 3px; }
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+@keyframes orbFloat1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(30px, -50px) scale(1.1); }
+  50% { transform: translate(-20px, -30px) scale(0.95); }
+  75% { transform: translate(40px, 20px) scale(1.05); }
+}
+@keyframes orbFloat2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(-40px, 30px) scale(1.05); }
+  50% { transform: translate(20px, 50px) scale(0.9); }
+  75% { transform: translate(-30px, -40px) scale(1.1); }
+}
+@keyframes orbFloat3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(50px, -20px) scale(1.08); }
+  66% { transform: translate(-30px, 40px) scale(0.92); }
+}
+@keyframes shimmer {
+  0% { left: -100%; }
+  100% { left: 200%; }
+}
