@@ -1,34 +1,38 @@
-import { useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useState, useCallback, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Play,
-  Music,
-  Download,
+  Link2,
+  ArrowRight,
+  Zap,
+  Music2,
   Image as ImageIcon,
+  ShieldCheck,
+  Monitor,
+  Headphones,
+  Info,
+  Download,
+  AlertTriangle,
+  CheckCircle,
+  FileText,
+  Hash,
+  User,
+  Users,
   Calendar,
+  Clock,
+  AlignLeft,
   Eye,
   ThumbsUp,
   MessageSquare,
   Tag,
   Folder,
   Lock,
-  FileText,
-  AlertTriangle,
   Radio,
   BookOpen,
   Settings,
   Languages,
-  ArrowLeft,
-  Link as LinkIcon,
-  Sparkles,
-  Search,
-  CheckCircle,
-  Hash,
-  User,
-  Users,
-  Video
-} from 'lucide-react'
-import './App.css'
+} from "lucide-react";
+import confetti from "canvas-confetti";
 import {
   fetchMetadata,
   fetchVideoResolutions,
@@ -37,556 +41,851 @@ import {
   downloadVideo,
   downloadAudio,
   downloadThumbnail,
-} from './api'
+  fetchDownloadProgress,
+} from "./api";
+
+/* ─── Tabs config ─── */
+const TABS = [
+  { id: "metadata", label: "Metadata", icon: Info },
+  { id: "video", label: "Video", icon: Monitor },
+  { id: "audio", label: "Audio", icon: Headphones },
+  { id: "thumbnail", label: "Thumbnail", icon: ImageIcon },
+];
 
 function App() {
-  const [url, setUrl] = useState('')
-  const [step, setStep] = useState('input')
-  const [loading, setLoading] = useState(false)
-  const [loadingText, setLoadingText] = useState('')
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [activeAction, setActiveAction] = useState('')
-  const [resultData, setResultData] = useState(null)
-  const [videoTitle, setVideoTitle] = useState('')
+  const [url, setUrl] = useState("");
+  const [activeTab, setActiveTab] = useState("metadata");
+  const [connected, setConnected] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [videoTitle, setVideoTitle] = useState("");
+  const [cache, setCache] = useState({});
 
-  const handleSubmitUrl = (e) => {
-    e.preventDefault()
-    if (!url.trim()) return
-    setError('')
-    setStep('actions')
-  }
+  const currentData = cache[activeTab] || null;
 
-  const handleBack = () => {
-    setStep('actions')
-    setActiveAction('')
-    setResultData(null)
-    setError('')
-    setSuccess('')
-  }
-
-  const handleBackToInput = () => {
-    setStep('input')
-    setActiveAction('')
-    setResultData(null)
-    setError('')
-    setSuccess('')
-    setVideoTitle('')
-  }
-
-  const handleAction = async (action) => {
-    setActiveAction(action)
-    setStep('result')
-    setLoading(true)
-    setError('')
-    setSuccess('')
-    setResultData(null)
-
-    try {
-      let data
-      switch (action) {
-        case 'metadata':
-          setLoadingText('Extracting comprehensive video metadata...')
-          data = await fetchMetadata(url)
-          setVideoTitle(data.title)
-          setResultData({ type: 'metadata', data })
-          break
-        case 'video':
-          setLoadingText('Scanning available video resolutions...')
-          data = await fetchVideoResolutions(url)
-          setVideoTitle(data.title)
-          setResultData({ type: 'video', data })
-          break
-        case 'audio':
-          setLoadingText('Analyzing available audio formats...')
-          data = await fetchAudioFormats(url)
-          setVideoTitle(data.title)
-          setResultData({ type: 'audio', data })
-          break
-        case 'thumbnail':
-          setLoadingText('Discovering thumbnail resolutions...')
-          data = await fetchThumbnailResolutions(url)
-          setVideoTitle(data.title)
-          setResultData({ type: 'thumbnail', data })
-          break
+  // Keyboard shortcut (Cmd+K or Ctrl+K) to focus input
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        document.getElementById("url-input")?.focus();
       }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const triggerConfetti = () => {
+    confetti({
+      particleCount: 50,
+      angle: 60,
+      spread: 55,
+      origin: { x: 0, y: 0.8 },
+      colors: ["#ff1744", "#ff3d61", "#e11d48"],
+    });
+    confetti({
+      particleCount: 50,
+      angle: 120,
+      spread: 55,
+      origin: { x: 1, y: 0.8 },
+      colors: ["#ff1744", "#ff3d61", "#e11d48"],
+    });
+  };
+
+  const handleConnect = useCallback(
+    async (e) => {
+      e.preventDefault();
+      const normalizedUrl = url.trim();
+      if (!normalizedUrl) return;
+      if (!isYouTubeUrl(normalizedUrl)) {
+        setError("Enter a valid YouTube link, e.g. youtube.com/watch?v=…");
+        return;
+      }
+      setError("");
+      setSuccess("");
+      setCache({});
+      setVideoTitle("");
+      setIsSubmitting(true);
+      try {
+        const [metaRes, videoRes, audioRes, thumbRes] = await Promise.allSettled([
+          fetchMetadata(normalizedUrl),
+          fetchVideoResolutions(normalizedUrl),
+          fetchAudioFormats(normalizedUrl),
+          fetchThumbnailResolutions(normalizedUrl),
+        ]);
+
+        if (metaRes.status === "rejected") {
+          throw metaRes.reason;
+        }
+
+        const metadata = metaRes.value;
+        const video = videoRes.status === "fulfilled" ? videoRes.value : null;
+        const audio = audioRes.status === "fulfilled" ? audioRes.value : null;
+        const thumbnail = thumbRes.status === "fulfilled" ? thumbRes.value : null;
+
+        setUrl(normalizedUrl);
+        setVideoTitle(metadata?.title || "");
+        setCache({
+          metadata,
+          video,
+          audio,
+          thumbnail,
+        });
+        setActiveTab("metadata");
+        setConnected(true);
+      } catch (err) {
+        setError(
+          err.message ||
+            "Could not analyze this link. Check the backend and try again."
+        );
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [url]
+  );
+
+  const handleDisconnect = () => {
+    setConnected(false);
+    setCache({});
+    setError("");
+    setSuccess("");
+    setVideoTitle("");
+  };
+
+  const handleTabChange = (tabId) => {
+    setActiveTab(tabId);
+    setError("");
+    setSuccess("");
+    if (!cache[tabId] && connected) {
+      fetchTabData(tabId, url);
+    }
+  };
+
+  const fetchTabData = async (tab, videoUrl) => {
+    setActiveTab(tab);
+    setLoading(true);
+    setError("");
+    try {
+      let data;
+      switch (tab) {
+        case "metadata":
+          data = await fetchMetadata(videoUrl);
+          setVideoTitle(data.title);
+          break;
+        case "video":
+          data = await fetchVideoResolutions(videoUrl);
+          if (data.title) setVideoTitle(data.title);
+          break;
+        case "audio":
+          data = await fetchAudioFormats(videoUrl);
+          if (data.title) setVideoTitle(data.title);
+          break;
+        case "thumbnail":
+          data = await fetchThumbnailResolutions(videoUrl);
+          if (data.title) setVideoTitle(data.title);
+          break;
+      }
+      setCache((prev) => ({ ...prev, [tab]: data }));
     } catch (err) {
-      setError(err.message || 'Something went wrong. Is the backend server running?')
+      setError(err.message || "Failed to fetch data.");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
-  const handleDownloadVideo = (resolution) => {
-    setError('')
-    setSuccess('⬇️ Video download request sent! Check Chrome\'s download bar.')
+  const retryCurrentTab = () => {
+    if (connected) fetchTabData(activeTab, url);
+  };
+
+  const handleDownloadVideo = async (resolution, taskId) => {
+    setError("");
     try {
-      downloadVideo(url, resolution, videoTitle)
+      await downloadVideo(url, resolution, taskId);
+      setSuccess("Download completed — saved to your downloads.");
+      triggerConfetti();
     } catch (err) {
-      setError(err.message)
+      setError(err.message || "Download failed");
+      throw err;
     }
-  }
+    setTimeout(() => setSuccess(""), 4000);
+  };
 
-  const handleDownloadAudio = (format) => {
-    setError('')
-    setSuccess('⬇️ Audio download request sent! Check Chrome\'s download bar.')
+  const handleDownloadAudio = async (format, taskId) => {
+    setError("");
     try {
-      downloadAudio(url, format, videoTitle)
+      await downloadAudio(url, format, taskId);
+      setSuccess("Download completed — saved to your downloads.");
+      triggerConfetti();
     } catch (err) {
-      setError(err.message)
+      setError(err.message || "Download failed");
+      throw err;
     }
-  }
+    setTimeout(() => setSuccess(""), 4000);
+  };
 
-  const handleDownloadThumbnail = (resolution) => {
-    setError('')
-    setSuccess('⬇️ Thumbnail download request sent! Check Chrome\'s download bar.')
+  const handleDownloadThumbnail = async (resolution, taskId) => {
+    setError("");
     try {
-      const thumbUrl = resultData.data.urls[resolution]
-      downloadThumbnail(thumbUrl, resolution, videoTitle)
+      const thumbUrl = currentData.urls[resolution];
+      await downloadThumbnail(thumbUrl, resolution, videoTitle);
+      setSuccess("Download completed — saved to your downloads.");
+      triggerConfetti();
     } catch (err) {
-      setError(err.message)
+      setError(err.message || "Download failed");
+      throw err;
     }
-  }
+    setTimeout(() => setSuccess(""), 4000);
+  };
 
-  const actions = [
-    {
-      id: 'metadata',
-      icon: <FileText className="w-6 h-6 text-purple-400" />,
-      title: 'Video Metadata',
-      desc: 'Channel details, views, likes, duration, chapters, subtitles & tags',
-      gradient: 'from-purple-500/20 to-blue-500/10 border-purple-500/20',
-      glow: 'shadow-purple-500/5'
-    },
-    {
-      id: 'video',
-      icon: <Video className="w-6 h-6 text-pink-400" />,
-      title: 'Download Video',
-      desc: 'Export resolution options from 144p up to 4K with file size details',
-      gradient: 'from-pink-500/20 to-purple-500/10 border-pink-500/20',
-      glow: 'shadow-pink-500/5'
-    },
-    {
-      id: 'audio',
-      icon: <Music className="w-6 h-6 text-cyan-400" />,
-      title: 'Download Audio',
-      desc: 'Extract audio stream and convert to MP3, M4A, WAV, FLAC, or AAC',
-      gradient: 'from-cyan-500/20 to-blue-500/10 border-cyan-500/20',
-      glow: 'shadow-cyan-500/5'
-    },
-    {
-      id: 'thumbnail',
-      icon: <ImageIcon className="w-6 h-6 text-emerald-400" />,
-      title: 'Download Thumbnail',
-      desc: 'Grab the video thumbnail cover image in maximum available resolution',
-      gradient: 'from-emerald-500/20 to-cyan-500/10 border-emerald-500/20',
-      glow: 'shadow-emerald-500/5'
-    },
-  ]
+  /* ═══════════════════════════════════════════
+     HERO (Not Connected) View
+     ═══════════════════════════════════════════ */
+  if (!connected) {
+    return (
+      <div className="app">
+        <div className="background-overlay" />
 
-  const pageVariants = {
-    initial: { opacity: 0, y: 15 },
-    animate: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } },
-    exit: { opacity: 0, y: -15, transition: { duration: 0.3, ease: 'easeIn' } }
-  }
-
-  return (
-    <div className="min-h-screen relative overflow-hidden select-none">
-      {/* Animated Background */}
-      <div className="bg-scene">
-        <div className="orb orb-1"></div>
-        <div className="orb orb-2"></div>
-        <div className="orb orb-3"></div>
-      </div>
-      <div className="grid-overlay"></div>
-
-      {/* Main Content Container */}
-      <div className="relative z-10 max-w-[1000px] mx-auto px-6 pt-16 pb-24">
-
-        {/* Dynamic Header */}
-        <header className="text-center mb-16">
-          <motion.div 
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ type: 'spring', stiffness: 100, delay: 0.1 }}
-            className="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-tr from-accent-purple to-accent-pink flex items-center justify-center shadow-lg shadow-accent-purple/20 mb-5 relative group cursor-pointer"
-          >
-            <Play className="w-9 h-9 fill-white text-white group-hover:scale-110 transition-transform duration-300 ml-1" />
-            <Sparkles className="w-5 h-5 text-accent-cyan absolute -top-1.5 -right-1.5 animate-pulse" />
-          </motion.div>
-
-          <motion.h1 
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="gradient-text text-5xl font-black tracking-tight leading-tight select-text"
-          >
-            YouTube Downloader
-          </motion.h1>
-          <motion.p 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.3 }}
-            className="text-txt-secondary text-[0.95rem] mt-3 font-light max-w-lg mx-auto leading-relaxed select-text"
-          >
-            Download HD video, audio streams, cover thumbnails, and extract detailed YouTube metadata instantly.
-          </motion.p>
+        <header className="top-header">
+          <div className="brand">
+            <div className="brand-icon">
+              <Play size={18} fill="white" />
+            </div>
+            <span>YT Downloader</span>
+          </div>
+          <div className="powered">
+            <Zap size={15} />
+            <span>Powered by yt-dlp</span>
+          </div>
         </header>
 
-        {/* Staged Form Transition Wrapper */}
-        <AnimatePresence mode="wait">
-          {/* STEP 1: Link input */}
-          {step === 'input' && (
-            <motion.div
-              key="input"
-              variants={pageVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              className="max-w-2xl mx-auto"
-            >
-              <div className="glass-card rounded-3xl p-8 border border-white/5 relative">
-                <h2 className="text-base font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                  <span className="flex h-2 w-2 rounded-full bg-accent-purple"></span>
-                  Start Downloader
-                </h2>
-                <p className="text-xs text-txt-muted mb-6">
-                  Provide any valid YouTube video or playlist link to fetch download formats.
-                </p>
+        <main className="hero-wrapper">
+          <motion.section
+            className="hero-card"
+            initial={{ opacity: 0, y: 30, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <div className="card-glow" />
 
-                <form onSubmit={handleSubmitUrl} className="flex gap-3 items-center">
-                  <div className="relative flex-1">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-txt-muted pointer-events-none">
-                      <Search className="w-5 h-5 opacity-55" />
-                    </span>
-                    <input
-                      id="url-input"
-                      type="text"
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      placeholder="https://www.youtube.com/watch?v=..."
-                      className="input-glow w-full py-4 px-5 pl-12 bg-bg-input border border-border rounded-xl text-txt-primary text-[0.95rem] font-medium font-[Inter] outline-none transition-all duration-300 placeholder:text-txt-muted select-text"
-                    />
+            <div className="hero-content">
+              <motion.div
+                className="hero-logo"
+                animate={{ y: [0, -4, 0] }}
+                transition={{
+                  duration: 4,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
+              >
+                <div className="logo-glow" />
+                <div className="hero-logo-inner">
+                  <Play size={48} fill="white" strokeWidth={0} />
+                </div>
+              </motion.div>
+
+              <motion.h1
+                className="hero-title"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.15, duration: 0.5 }}
+              >
+                <span>YouTube</span> <strong>Downloader</strong>
+              </motion.h1>
+
+              <motion.p
+                className="hero-description"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.25, duration: 0.5 }}
+              >
+                Paste any YouTube link to analyze metadata, download
+                high-definition video, extract raw audio, or save thumbnail
+                graphics.
+              </motion.p>
+
+              <motion.form
+                className="download-form"
+                onSubmit={handleConnect}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.35, duration: 0.5 }}
+              >
+                <div className="input-box">
+                  <Link2 className="input-icon" size={23} />
+                  <input
+                    id="url-input"
+                    type="url"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="Paste a YouTube URL..."
+                    aria-label="YouTube URL"
+                    autoComplete="url"
+                    inputMode="url"
+                  />
+                  <div className="shortcut">
+                    <kbd>⌘</kbd>
+                    <kbd>K</kbd>
                   </div>
-                  <motion.button
-                    id="submit-url-btn"
-                    type="submit"
-                    disabled={!url.trim()}
-                    whileHover={url.trim() ? { scale: 1.02 } : {}}
-                    whileTap={url.trim() ? { scale: 0.98 } : {}}
-                    className="gradient-btn py-4 px-8 border-none rounded-xl text-white text-[0.95rem] font-bold font-[Inter] cursor-pointer transition-all duration-300 whitespace-nowrap tracking-wide hover:not-disabled:shadow-[0_8px_30px_rgba(139,92,246,0.4)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
-                  >
-                    <span>Fetch</span>
-                    <Sparkles className="w-4 h-4" />
-                  </motion.button>
-                </form>
+                </div>
 
+                <button
+                  className="analyze-button"
+                  type="submit"
+                  disabled={!url.trim() || isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <span className="analyzing-state">
+                      <span>Analyzing</span>
+                      <span className="animated-dots">
+                        <span className="dot dot-1">.</span>
+                        <span className="dot dot-2">.</span>
+                        <span className="dot dot-3">.</span>
+                      </span>
+                    </span>
+                  ) : (
+                    <>
+                      <span>Analyze</span>
+                      <ArrowRight size={19} strokeWidth={2.4} />
+                    </>
+                  )}
+                </button>
+              </motion.form>
+
+              {/* Error */}
+              <AnimatePresence>
                 {error && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
+                  <motion.div
+                    className="alert alert-error"
+                    initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="mt-5 py-3.5 px-5 rounded-xl text-sm flex items-center gap-2.5 bg-accent-red/10 border border-accent-red/20 text-accent-red"
+                    exit={{ opacity: 0 }}
                   >
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    <span className="select-text">{error}</span>
+                    <AlertTriangle size={16} />
+                    <span>{error}</span>
                   </motion.div>
                 )}
-              </div>
+              </AnimatePresence>
 
-              {/* Feature Tags */}
-              <div className="flex items-center justify-center gap-3 mt-8 flex-wrap">
-                {['Direct Stream', 'Highest Quality', 'MP3 Converter', 'Artwork Cover', 'JSON Metadata'].map((f, idx) => (
-                  <motion.span 
-                    key={f}
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: 0.4 + idx * 0.05 }}
-                    className="py-1.5 px-4 rounded-full text-xs font-semibold text-txt-secondary border border-border bg-glass hover:text-txt-primary transition-colors"
-                  >
-                    {f}
-                  </motion.span>
-                ))}
-              </div>
-            </motion.div>
-          )}
-
-          {/* STEP 2: Main Choices */}
-          {step === 'actions' && (
-            <motion.div
-              key="actions"
-              variants={pageVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-            >
-              {/* Top Link Pill Banner */}
-              <div className="glass-card rounded-2xl py-4 px-6 mb-8 flex items-center gap-3.5 border border-white/5">
-                <div className="w-2.5 h-2.5 rounded-full bg-accent-green animate-pulse shrink-0"></div>
-                <span className="text-xs text-txt-secondary font-medium truncate select-text">
-                  Connected: <span className="text-txt-primary font-semibold">{url}</span>
-                </span>
-                <motion.button
-                  onClick={handleBackToInput}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="ml-auto py-1.5 px-4 rounded-lg text-xs font-semibold text-txt-secondary border border-border bg-glass font-[Inter] cursor-pointer transition-all duration-300 hover:border-accent-purple hover:text-txt-primary shrink-0"
-                >
-                  Change Link
-                </motion.button>
-              </div>
-
-              <h2 className="text-lg font-bold text-txt-primary mb-6 flex items-center gap-2">
-                <Settings className="w-5 h-5 text-accent-purple" />
-                Select Downloader Operation
-              </h2>
-
-              <div className="grid grid-cols-2 gap-5 max-[680px]:grid-cols-1">
-                {actions.map((action, i) => (
-                  <motion.div
-                    key={action.id}
-                    id={`action-${action.id}`}
-                    onClick={() => handleAction(action.id)}
-                    whileHover={{ y: -5, scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    className={`card-accent glass-inner rounded-2xl p-7 border border-white/5 cursor-pointer shadow-lg hover:border-border-glow transition-all duration-300 hover:${action.glow} flex flex-col items-start relative group`}
-                  >
-                    <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${action.gradient} flex items-center justify-center mb-5 border transition-transform duration-300 group-hover:scale-105`}>
-                      {action.icon}
-                    </div>
-                    <h3 className="text-base font-bold mb-2 text-txt-primary group-hover:text-accent-purple-light transition-colors duration-300">
-                      {action.title}
-                    </h3>
-                    <p className="text-xs text-txt-secondary leading-relaxed mb-4">
-                      {action.desc}
-                    </p>
-                    <div className="mt-auto flex items-center gap-1.5 text-xs text-txt-muted group-hover:text-accent-purple font-semibold transition-colors duration-300">
-                      <span>Proceed</span>
-                      <span className="transition-transform duration-300 group-hover:translate-x-1">→</span>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            </motion.div>
-          )}
-
-          {/* STEP 3: Downloader Results */}
-          {step === 'result' && (
-            <motion.div
-              key="result"
-              variants={pageVariants}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-            >
-              {/* Result Header */}
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-black flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-glass border border-white/5 flex items-center justify-center">
-                    {activeAction === 'metadata' && <FileText className="w-5 h-5 text-purple-400" />}
-                    {activeAction === 'video' && <Video className="w-5 h-5 text-pink-400" />}
-                    {activeAction === 'audio' && <Music className="w-5 h-5 text-cyan-400" />}
-                    {activeAction === 'thumbnail' && <ImageIcon className="w-5 h-5 text-emerald-400" />}
-                  </div>
-                  <span className="select-text">
-                    {activeAction === 'metadata' && 'Video Metadata'}
-                    {activeAction === 'video' && 'Video Formats'}
-                    {activeAction === 'audio' && 'Audio Formats'}
-                    {activeAction === 'thumbnail' && 'Thumbnail Resolutions'}
-                  </span>
-                </h2>
-                <motion.button
-                  onClick={handleBack}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="py-2 px-5 glass-inner rounded-xl text-txt-secondary text-sm font-semibold font-[Inter] cursor-pointer transition-all duration-300 hover:border-accent-purple hover:text-txt-primary flex items-center gap-2"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                  <span>Back</span>
-                </motion.button>
-              </div>
-
-              {/* Connected details banner */}
-              {videoTitle && !loading && (
-                <div className="glass-card rounded-xl py-3.5 px-5 mb-6 flex items-center gap-3 border border-white/5">
-                  <CheckCircle className="w-4 h-4 text-accent-green shrink-0" />
-                  <span className="text-xs text-txt-secondary truncate select-text">
-                    Title: <span className="text-txt-primary font-semibold">{videoTitle}</span>
-                  </span>
-                </div>
-              )}
-
-              {/* Fullpage Loader */}
-              {loading && (
-                <div className="glass-card rounded-3xl flex flex-col items-center justify-center py-24 gap-5 border border-white/5">
-                  <div className="spinner"></div>
-                  <p className="text-txt-secondary text-xs font-semibold animate-pulse-text">{loadingText}</p>
-                </div>
-              )}
-
-              {/* Status Alert Panels */}
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, y: -5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="py-4 px-5 rounded-2xl text-xs font-semibold flex items-center gap-2.5 bg-accent-red/10 border border-accent-red/20 text-accent-red mb-5 select-text"
-                >
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>{error}</span>
-                </motion.div>
-              )}
-
-              {success && (
-                <motion.div 
-                  initial={{ opacity: 0, y: -5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="py-4 px-5 rounded-2xl text-xs font-semibold flex items-center gap-2.5 bg-accent-green/10 border border-accent-green/20 text-accent-green mb-5"
-                >
-                  <CheckCircle className="w-4 h-4 shrink-0 animate-bounce" />
-                  <span className="select-text">{success}</span>
-                </motion.div>
-              )}
-
-              {/* METADATA RESULT VIEW */}
-              {resultData?.type === 'metadata' && !loading && (
-                <MetadataDisplay data={resultData.data} />
-              )}
-
-              {/* VIDEO RESOLUTIONS VIEW */}
-              {resultData?.type === 'video' && !loading && (
-                <QualityList items={resultData.data.resolutions} onDownload={handleDownloadVideo} />
-              )}
-
-              {/* AUDIO FORMATS VIEW */}
-              {resultData?.type === 'audio' && !loading && (
-                <QualityList items={resultData.data.formats} descriptions={resultData.data.details} onDownload={handleDownloadAudio} />
-              )}
-
-              {/* THUMBNAIL RESOLUTIONS VIEW */}
-              {resultData?.type === 'thumbnail' && !loading && (
-                <QualityList items={resultData.data.resolutions} onDownload={handleDownloadThumbnail} />
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Footer */}
-        <footer className="text-center mt-24 py-5 text-txt-muted text-xs tracking-wide">
-          Built with <span className="text-accent-purple font-semibold">FastAPI</span> • <span className="text-accent-pink font-semibold">React</span> • <span className="text-accent-cyan font-semibold">Tailwind v4</span> • <span className="text-purple-400 font-semibold">Framer Motion</span>
-        </footer>
+              {/* Features */}
+              <motion.div
+                className="feature-row"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.45, duration: 0.5 }}
+              >
+                <Feature icon={<Zap size={18} />} text="HD Quality" />
+                <Divider />
+                <Feature icon={<Music2 size={18} />} text="Extract Audio" />
+                <Divider />
+                <Feature
+                  icon={<ImageIcon size={18} />}
+                  text="Get Thumbnails"
+                />
+                <Divider />
+                <Feature
+                  icon={<ShieldCheck size={18} />}
+                  text="Fast & Reliable"
+                />
+              </motion.div>
+            </div>
+          </motion.section>
+        </main>
       </div>
+    );
+  }
+
+  /* ═══════════════════════════════════════════
+     CONNECTED View — Tabs + Content
+     ═══════════════════════════════════════════ */
+  return (
+    <div className="app">
+      <div className="background-overlay" />
+
+      <header className="top-header">
+        <div className="brand">
+          <div className="brand-icon">
+            <Play size={18} fill="white" />
+          </div>
+          <span>YT Downloader</span>
+        </div>
+        <div className="powered">
+          <span className="connected-badge">
+            <span className="connected-dot" />
+            Connected
+          </span>
+        </div>
+      </header>
+
+      <main className="dashboard-wrapper">
+        <motion.div
+          className="dashboard-card"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          {/* Sticky Dashboard Navigation (Active link bar + Tab bar) */}
+          <div className="sticky-dashboard-nav">
+            {/* Active URL bar */}
+            <div className="active-url-bar">
+              <div className="active-url-info">
+                <span className="connected-dot" />
+                <span className="active-url-text">
+                  Active: <strong>{videoTitle || url}</strong>
+                </span>
+              </div>
+              <button className="change-link-btn" onClick={handleDisconnect}>
+                Change Link
+              </button>
+            </div>
+
+            {/* Tab Bar */}
+            <div className="tab-bar">
+              {TABS.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => handleTabChange(tab.id)}
+                    className={`tab-item ${isActive ? "tab-active" : ""}`}
+                  >
+                  <Icon size={16} />
+                  {tab.label}
+                  {isActive && (
+                    <motion.div
+                      layoutId="activeTab"
+                      className="tab-underline"
+                      transition={{
+                        type: "spring",
+                        stiffness: 380,
+                        damping: 30,
+                      }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+          {/* Alerts */}
+          <AnimatePresence>
+            {error && (
+              <motion.div
+                className="alert alert-error"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+              >
+                <AlertTriangle size={16} />
+                <span>{error}</span>
+                <button className="retry-btn" onClick={retryCurrentTab}>
+                  Retry
+                </button>
+              </motion.div>
+            )}
+            {success && (
+              <motion.div
+                className="alert alert-success"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+              >
+                <CheckCircle size={16} />
+                <span>{success}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Loading */}
+          {loading && (
+            <div className="loading-state">
+              <div className="spinner" />
+              <span>Analyzing video formats...</span>
+            </div>
+          )}
+
+          {/* Tab Content */}
+          {!loading && (
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.2 }}
+              >
+                {activeTab === "metadata" && currentData && (
+                  <MetadataView data={currentData} />
+                )}
+                {activeTab === "video" && currentData && (
+                  <DownloadList
+                    items={currentData.resolutions}
+                    onDownload={handleDownloadVideo}
+                    icon={Monitor}
+                    emptyLabel="video resolutions"
+                  />
+                )}
+                {activeTab === "audio" && currentData && (
+                  <DownloadList
+                    items={currentData.formats}
+                    descriptions={currentData.details}
+                    onDownload={handleDownloadAudio}
+                    icon={Headphones}
+                    emptyLabel="audio formats"
+                  />
+                )}
+                {activeTab === "thumbnail" && currentData && (
+                  <DownloadList
+                    items={currentData.resolutions}
+                    onDownload={handleDownloadThumbnail}
+                    icon={ImageIcon}
+                    emptyLabel="thumbnail sizes"
+                  />
+                )}
+                {!currentData && !loading && (
+                  <div className="empty-state">
+                    No data available. Try fetching again.
+                  </div>
+                )}
+              </motion.div>
+            </AnimatePresence>
+          )}
+        </motion.div>
+      </main>
     </div>
-  )
+  );
 }
 
-/* ─────────────── Metadata Display Component ─────────────── */
-function MetadataDisplay({ data }) {
-  const rows = [
-    { icon: <FileText className="w-4 h-4 text-purple-400" />, label: 'Title', value: data.title },
-    { icon: <Hash className="w-4 h-4 text-pink-400" />, label: 'Video ID', value: data.video_id },
-    { icon: <User className="w-4 h-4 text-blue-400" />, label: 'Channel', value: data.channel },
-    { icon: <Users className="w-4 h-4 text-cyan-400" />, label: 'Subscribers', value: data.subscribers ? data.subscribers.toLocaleString() : 'Hidden' },
-    { icon: <Calendar className="w-4 h-4 text-emerald-400" />, label: 'Upload Date', value: data.upload_date },
-    { icon: <Eye className="w-4 h-4 text-teal-400" />, label: 'Views', value: data.views ? data.views.toLocaleString() : 'Hidden' },
-    { icon: <ThumbsUp className="w-4 h-4 text-orange-400" />, label: 'Likes', value: data.likes ? data.likes.toLocaleString() : 'Hidden' },
-    { icon: <MessageSquare className="w-4 h-4 text-yellow-400" />, label: 'Comments', value: data.comments ? data.comments.toLocaleString() : 'Hidden' },
-    { icon: <AlignLeft className="w-4 h-4 text-red-400" />, label: 'Description', value: data.description_snippet },
-    { icon: <Tag className="w-4 h-4 text-purple-400" />, label: 'Tags', value: data.tags?.length ? data.tags.slice(0, 5).join(', ') + (data.tags.length > 5 ? '...' : '') : 'None' },
-    { icon: <Folder className="w-4 h-4 text-pink-400" />, label: 'Category', value: data.categories?.join(', ') || 'None' },
-    { icon: <Lock className="w-4 h-4 text-blue-400" />, label: 'Privacy', value: data.privacy },
-    { icon: <FileText className="w-4 h-4 text-cyan-400" />, label: 'License', value: data.license },
-    { icon: <AlertTriangle className="w-4 h-4 text-emerald-400" />, label: 'Age Restricted', value: data.age_restricted ? 'Yes' : 'No' },
-    { icon: <Radio className="w-4 h-4 text-red-400" />, label: 'Live Status', value: data.live_status },
-    { icon: <BookOpen className="w-4 h-4 text-orange-400" />, label: 'Chapters', value: data.total_chapters > 0 ? `${data.total_chapters} chapters` : 'None' },
-    { icon: <Settings className="w-4 h-4 text-yellow-400" />, label: 'Total Formats', value: `${data.total_formats} streams` },
-    { icon: <Languages className="w-4 h-4 text-teal-400" />, label: 'Subtitles', value: data.subtitles?.length ? data.subtitles.join(', ') : 'None' },
-  ]
+/* ═══════════════════════════════════════════════════
+   Metadata View
+   ═══════════════════════════════════════════════════ */
+function MetadataView({ data }) {
+  const basicInfo = [
+    { icon: <FileText size={16} />, label: "Title", value: data.title },
+    { icon: <Hash size={16} />, label: "Video ID", value: data.video_id },
+    { icon: <User size={16} />, label: "Channel", value: data.channel },
+    {
+      icon: <Calendar size={16} />,
+      label: "Upload Date",
+      value: data.upload_date,
+    },
+    { icon: <Clock size={16} />, label: "Duration", value: data.duration || "—" },
+    {
+      icon: <AlignLeft size={16} />,
+      label: "Description",
+      value: data.description_snippet || "—",
+    },
+  ];
+
+  const engagement = [
+    {
+      icon: <Eye size={16} />,
+      label: "Views",
+      value: data.views ? data.views.toLocaleString() : "Hidden",
+    },
+    {
+      icon: <ThumbsUp size={16} />,
+      label: "Likes",
+      value: data.likes ? data.likes.toLocaleString() : "Hidden",
+    },
+    {
+      icon: <MessageSquare size={16} />,
+      label: "Comments",
+      value: data.comments ? data.comments.toLocaleString() : "Hidden",
+    },
+    {
+      icon: <Users size={16} />,
+      label: "Subscribers",
+      value: data.subscribers ? data.subscribers.toLocaleString() : "Hidden",
+    },
+  ];
+
+  const technical = [
+    {
+      icon: <Tag size={16} />,
+      label: "Tags",
+      value: data.tags?.length
+        ? data.tags.slice(0, 8).join(", ") +
+          (data.tags.length > 8 ? "…" : "")
+        : "None",
+    },
+    {
+      icon: <Folder size={16} />,
+      label: "Category",
+      value: data.categories?.join(", ") || "None",
+    },
+    { icon: <Lock size={16} />, label: "Privacy", value: data.privacy },
+    { icon: <FileText size={16} />, label: "License", value: data.license },
+    {
+      icon: <AlertTriangle size={16} />,
+      label: "Age Restricted",
+      value: data.age_restricted ? "Yes" : "No",
+    },
+    { icon: <Radio size={16} />, label: "Live Status", value: data.live_status },
+    {
+      icon: <BookOpen size={16} />,
+      label: "Chapters",
+      value:
+        data.total_chapters > 0
+          ? `${data.total_chapters} chapters`
+          : "None",
+    },
+    {
+      icon: <Settings size={16} />,
+      label: "Formats",
+      value: `${data.total_formats} streams`,
+    },
+    {
+      icon: <Languages size={16} />,
+      label: "Subtitles",
+      value: data.subtitles?.length ? data.subtitles.join(", ") : "None",
+    },
+  ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-5 gap-8 items-start select-text">
-      {/* Left Column: Premium YouTube-style Thumbnail with Hover Glow */}
-      <div className="md:col-span-2 space-y-4 select-none">
-        {data.thumbnail ? (
-          <div className="relative group rounded-2xl overflow-hidden border border-white/10 shadow-[0_15px_45px_rgba(0,0,0,0.7)] aspect-video bg-black/40">
-            <img 
-              src={data.thumbnail} 
-              alt="Video Thumbnail" 
-              className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-            />
-            {data.duration && (
-              <span className="absolute bottom-3.5 right-3.5 px-2.5 py-1 bg-black/85 text-[0.7rem] font-bold text-white tracking-widest rounded-md shadow select-none">
-                {data.duration}
-              </span>
-            )}
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-dashed border-border aspect-video flex items-center justify-center text-txt-muted">
-            No high-resolution thumbnail found
+    <div className="metadata-grid">
+      {/* Thumbnail + Engagement */}
+      <div className="metadata-sidebar">
+        {data.thumbnail && (
+          <div className="thumbnail-preview">
+            <img src={data.thumbnail} alt="Thumbnail" />
           </div>
         )}
+        <div className="stat-grid">
+          {engagement.map((item) => (
+            <div key={item.label} className="stat-card">
+              <div className="stat-label">
+                {item.icon}
+                <span>{item.label}</span>
+              </div>
+              <span className="stat-value">{item.value}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Right Column: Information table */}
-      <div className="md:col-span-3 glass-card rounded-2xl overflow-hidden divide-y divide-white/[0.04] border border-white/5">
+      {/* Info Sections */}
+      <div className="metadata-main">
+        <MetadataSection title="Basic Information" rows={basicInfo} />
+        <MetadataSection title="Technical Details" rows={technical} />
+      </div>
+    </div>
+  );
+}
+
+function MetadataSection({ title, rows }) {
+  return (
+    <div className="info-section">
+      <div className="info-section-header">
+        <h3>{title}</h3>
+      </div>
+      <div className="info-section-body">
         {rows.map((row, i) => (
-          <div
-            key={i}
-            className="flex items-start py-3.5 px-5 transition-all duration-300 gap-4 hover:bg-white/[0.02]"
-          >
-            <div className="shrink-0 pt-0.5 select-none">{row.icon}</div>
-            <span className="font-semibold text-[0.7rem] uppercase tracking-wider text-txt-muted min-w-[110px] shrink-0 pt-0.5 select-none">{row.label}</span>
-            <span className="text-[0.85rem] text-txt-primary break-words flex-1 leading-relaxed">{row.value}</span>
+          <div key={i} className="info-row">
+            <span className="info-row-icon">{row.icon}</span>
+            <span className="info-row-label">{row.label}</span>
+            <span className="info-row-value">{row.value}</span>
           </div>
         ))}
       </div>
     </div>
-  )
+  );
 }
 
-/* ─────────────── Quality / Format List Component ─────────────── */
-function QualityList({ items, descriptions, onDownload }) {
-  const [downloadingKey, setDownloadingKey] = useState(null)
+/* ═══════════════════════════════════════════════════
+   Download List
+   ═══════════════════════════════════════════════════ */
+function DownloadList({ items, descriptions, onDownload, icon: Icon, emptyLabel }) {
+  const [activeDownload, setActiveDownload] = useState(null);
 
-  const handleClick = (key) => {
-    setDownloadingKey(key)
-    onDownload(key)
-    setTimeout(() => {
-      setDownloadingKey(null)
-    }, 4000)
+  useEffect(() => {
+    let timerInterval = null;
+    let pollInterval = null;
+
+    if (activeDownload && activeDownload.status === "downloading") {
+      timerInterval = setInterval(() => {
+        setActiveDownload((prev) => (prev ? { ...prev, elapsed: prev.elapsed + 1 } : null));
+      }, 1000);
+
+      pollInterval = setInterval(async () => {
+        if (!activeDownload?.taskId) return;
+        const prog = await fetchDownloadProgress(activeDownload.taskId);
+        if (prog) {
+          setActiveDownload((prev) => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              percent: prog.percent || prev.percent,
+              speed: prog.speed || prev.speed,
+              eta: prog.eta || prev.eta,
+              backendStatus: prog.status,
+            };
+          });
+        }
+      }, 600);
+    }
+
+    return () => {
+      if (timerInterval) clearInterval(timerInterval);
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [activeDownload?.taskId, activeDownload?.status]);
+
+  const handleClick = async (key) => {
+    const taskId = "dl_" + Date.now();
+    setActiveDownload({
+      key,
+      taskId,
+      elapsed: 0,
+      percent: 0,
+      speed: "",
+      eta: "",
+      status: "downloading",
+    });
+
+    try {
+      await onDownload(key, taskId);
+      setActiveDownload((prev) => (prev ? { ...prev, status: "completed", percent: 100 } : null));
+      setTimeout(() => setActiveDownload(null), 4000);
+    } catch {
+      setActiveDownload((prev) => (prev ? { ...prev, status: "error" } : null));
+      setTimeout(() => setActiveDownload(null), 5000);
+    }
+  };
+
+  const formatTime = (totalSeconds) => {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  };
+
+  const entries = Object.entries(items || {});
+
+  if (entries.length === 0) {
+    return <div className="empty-state">No {emptyLabel} found.</div>;
   }
 
-  const entries = Object.entries(items)
-
   return (
-    <div className="flex flex-col gap-3.5 select-text">
-      {entries.map(([key, size]) => (
-        <div
-          key={key}
-          className="glass-inner rounded-2xl py-4 px-6 flex items-center justify-between border border-white/5 transition-all duration-300 hover:border-accent-purple/40 hover:bg-bg-card-hover hover:translate-x-1 group"
-        >
-          <div className="flex items-center gap-4">
-            <span className="py-1.5 px-4 bg-accent-purple/15 rounded-xl text-[0.85rem] font-black text-accent-purple-light tracking-wide select-none">
-              {key}
-            </span>
-            {descriptions && descriptions[key] && (
-              <span className="text-xs text-txt-secondary hidden sm:inline select-none font-medium">{descriptions[key]}</span>
-            )}
-          </div>
-          <div className="flex items-center gap-5">
-            <span className="text-xs text-txt-muted font-semibold tracking-wide select-none">{size}</span>
-            <motion.button
-              onClick={() => handleClick(key)}
-              disabled={downloadingKey !== null}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className="gradient-btn py-2.5 px-6 border-none rounded-xl text-white text-[0.8rem] font-bold font-[Inter] cursor-pointer transition-all duration-300 hover:not-disabled:shadow-[0_4px_20px_rgba(139,92,246,0.35)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 select-none"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>{downloadingKey === key ? 'Starting...' : 'Download'}</span>
-            </motion.button>
-          </div>
-        </div>
-      ))}
+    <div>
+      <div className="list-count">
+        {entries.length} {entries.length === 1 ? "option" : "options"} available
+      </div>
+      <div className="download-list">
+        {entries.map(([key, size]) => {
+          const isCurrent = activeDownload?.key === key;
+          const isDownloading = isCurrent && activeDownload.status === "downloading";
+          const isCompleted = isCurrent && activeDownload.status === "completed";
+          const isError = isCurrent && activeDownload.status === "error";
+
+          return (
+            <div key={key} className={`download-row ${isCurrent ? "download-row-active" : ""}`}>
+              <div className="download-row-left">
+                <div className="download-row-icon">
+                  <Icon size={18} />
+                </div>
+                <div>
+                  <div className="download-row-title-wrap">
+                    <span className="download-row-name">{key}</span>
+                    {isDownloading && (
+                      <span className="live-timer-badge">
+                        ⏱️ {formatTime(activeDownload.elapsed)}
+                      </span>
+                    )}
+                  </div>
+                  {descriptions?.[key] && (
+                    <span className="download-row-desc">{descriptions[key]}</span>
+                  )}
+                  {isDownloading && (
+                    <div className="live-progress-container">
+                      <div className="progress-bar-bg">
+                        <div
+                          className="progress-bar-fill"
+                          style={{
+                            width: `${Math.max(activeDownload.percent || 5, 5)}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="progress-details-text">
+                        <span>
+                          {activeDownload.backendStatus === "processing"
+                            ? "Merging video & audio format..."
+                            : `Downloading ${activeDownload.percent || 0}%`}
+                        </span>
+                        {activeDownload.speed && <span>{activeDownload.speed}</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="download-row-right">
+                <span className="download-row-size">{size}</span>
+                <button
+                  className={`download-btn ${isDownloading ? "download-btn-loading" : ""} ${
+                    isCompleted ? "download-btn-success" : ""
+                  }`}
+                  onClick={() => handleClick(key)}
+                  disabled={activeDownload !== null}
+                >
+                  {isDownloading ? (
+                    <>
+                      <div className="spinner-sm" />
+                      <span>{formatTime(activeDownload.elapsed)}</span>
+                    </>
+                  ) : isCompleted ? (
+                    <>
+                      <CheckCircle size={16} />
+                      <span>Saved ({formatTime(activeDownload.elapsed)})</span>
+                    </>
+                  ) : isError ? (
+                    <>
+                      <AlertTriangle size={16} />
+                      <span>Failed</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download size={16} />
+                      <span>Download</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
-  )
+  );
 }
 
-export default App
+/* ─── Helpers ─── */
+function Feature({ icon, text }) {
+  return (
+    <div className="feature">
+      <div className="feature-icon">{icon}</div>
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function Divider() {
+  return <div className="feature-divider" />;
+}
+
+function isYouTubeUrl(value) {
+  try {
+    const hostname = new URL(value).hostname.replace(/^www\./, "").toLowerCase();
+    return (
+      hostname === "youtube.com" ||
+      hostname.endsWith(".youtube.com") ||
+      hostname === "youtu.be"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export default App;
