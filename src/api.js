@@ -86,8 +86,8 @@ export async function downloadAudio(url, target, taskId) {
   return data
 }
 
-export async function downloadThumbnail(url, target, title) {
-  const data = await request('/api/download/thumbnail', postBody({ url, target, title }), 'Unable to download this thumbnail.')
+export async function downloadThumbnail(url, target, title, taskId) {
+  const data = await request('/api/download/thumbnail', postBody({ url, target, title, task_id: taskId }), 'Unable to download this thumbnail.')
   triggerBrowserDownload(data.filename)
   return data
 }

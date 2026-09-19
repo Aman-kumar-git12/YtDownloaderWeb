@@ -109,30 +109,14 @@ function App() {
       setVideoTitle("");
       setIsSubmitting(true);
       try {
-        const [metaRes, videoRes, audioRes, thumbRes] = await Promise.allSettled([
-          fetchMetadata(normalizedUrl),
-          fetchVideoResolutions(normalizedUrl),
-          fetchAudioFormats(normalizedUrl),
-          fetchThumbnailResolutions(normalizedUrl),
-        ]);
-
-        if (metaRes.status === "rejected") {
-          throw metaRes.reason;
-        }
-
-        const metadata = metaRes.value;
-        const video = videoRes.status === "fulfilled" ? videoRes.value : null;
-        const audio = audioRes.status === "fulfilled" ? audioRes.value : null;
-        const thumbnail = thumbRes.status === "fulfilled" ? thumbRes.value : null;
+        // Fetch metadata first. Starting four independent yt-dlp extractions
+        // at once can trigger YouTube rate limits and bot checks. The other
+        // data is loaded only when its tab is opened.
+        const metadata = await fetchMetadata(normalizedUrl);
 
         setUrl(normalizedUrl);
         setVideoTitle(metadata?.title || "");
-        setCache({
-          metadata,
-          video,
-          audio,
-          thumbnail,
-        });
+        setCache({ metadata });
         setActiveTab("metadata");
         setConnected(true);
       } catch (err) {
@@ -230,7 +214,7 @@ function App() {
     setError("");
     try {
       const thumbUrl = currentData.urls[resolution];
-      await downloadThumbnail(thumbUrl, resolution, videoTitle);
+      await downloadThumbnail(thumbUrl, resolution, videoTitle, taskId);
       setSuccess("Download completed — saved to your downloads.");
       triggerConfetti();
     } catch (err) {
@@ -701,19 +685,20 @@ function MetadataSection({ title, rows }) {
    ═══════════════════════════════════════════════════ */
 function DownloadList({ items, descriptions, onDownload, icon: Icon, emptyLabel }) {
   const [activeDownload, setActiveDownload] = useState(null);
+  const activeTaskId = activeDownload?.taskId;
+  const isDownloadActive = activeDownload?.status === "downloading";
 
   useEffect(() => {
     let timerInterval = null;
     let pollInterval = null;
 
-    if (activeDownload && activeDownload.status === "downloading") {
+    if (isDownloadActive && activeTaskId) {
       timerInterval = setInterval(() => {
         setActiveDownload((prev) => (prev ? { ...prev, elapsed: prev.elapsed + 1 } : null));
       }, 1000);
 
       pollInterval = setInterval(async () => {
-        if (!activeDownload?.taskId) return;
-        const prog = await fetchDownloadProgress(activeDownload.taskId);
+        const prog = await fetchDownloadProgress(activeTaskId);
         if (prog) {
           setActiveDownload((prev) => {
             if (!prev) return null;
@@ -733,7 +718,7 @@ function DownloadList({ items, descriptions, onDownload, icon: Icon, emptyLabel 
       if (timerInterval) clearInterval(timerInterval);
       if (pollInterval) clearInterval(pollInterval);
     };
-  }, [activeDownload?.taskId, activeDownload?.status]);
+  }, [activeTaskId, isDownloadActive]);
 
   const handleClick = async (key) => {
     const taskId = "dl_" + Date.now();
