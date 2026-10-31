@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Check, LogIn, RotateCcw, Scissors, X } from "lucide-react";
+import { AlertTriangle, Check, Info, LogIn, RotateCcw, Scissors, TrendingUp, X } from "lucide-react";
+import { buildHighlights } from "../../lib/highlights";
 import ReplayChart from "./ReplayChart";
 import {
   formatCompact,
@@ -19,10 +20,15 @@ import {
 const ESTIMATE_NOTE = "Estimate from public data. Only the channel owner can see real earnings.";
 
 // One card; shows a skeleton, an error with retry, or its content
-function Card({ title, state, onRetry, wide, children, note }) {
+const SOURCE_LABELS = { real: "Real data", estimate: "Estimate", mixed: "Real + estimates" };
+
+function Card({ title, state, onRetry, wide, children, note, source = "real" }) {
   return (
     <section className={`insight ${wide ? "insight-wide" : ""}`} aria-busy={state?.status === "loading"}>
-      <h2>{title}</h2>
+      <div className="insight-head">
+        <h2>{title}</h2>
+        <span className={`source source-${source}`}>{SOURCE_LABELS[source]}</span>
+      </div>
       {!state || state.status === "loading" ? (
         <div className="insight-loading" aria-label="Loading">
           <span />
@@ -479,6 +485,60 @@ function Technical({ data }) {
   );
 }
 
+const TONE_ICONS = { good: TrendingUp, warn: AlertTriangle, info: Info };
+const TONE_LABELS = { good: "Good sign", warn: "Watch out", info: "Worth knowing" };
+
+function Highlights({ insights, onClip }) {
+  const ready = (part) => (insights[part]?.status === "ready" ? insights[part].data : null);
+  const items = buildHighlights({
+    video: ready("video"),
+    channel: ready("channel"),
+    comments: ready("comments"),
+    transcript: ready("transcript"),
+  });
+  const stillLoading = Object.values(insights).some((p) => p?.status === "loading");
+
+  return (
+    <section className="insight insight-wide highlights" aria-busy={stillLoading && !items.length}>
+      <div className="insight-head">
+        <h2>What stands out</h2>
+        {stillLoading && <span className="muted small-text">Still reading comments and captions…</span>}
+      </div>
+      {!items.length ? (
+        stillLoading ? (
+          <div className="insight-loading" aria-label="Loading">
+            <span />
+            <span />
+          </div>
+        ) : (
+          <p className="muted">Nothing unusual about this video; it’s performing as expected.</p>
+        )
+      ) : (
+        <ol className="highlight-list">
+          {items.map((item, i) => {
+            const Icon = TONE_ICONS[item.tone];
+            return (
+              <li key={item.title} className={`highlight highlight-${item.tone}`} style={{ animationDelay: `${i * 60}ms` }}>
+                <Icon size={18} aria-label={TONE_LABELS[item.tone]} />
+                <div>
+                  <strong>{item.title}</strong>
+                  {item.detail && <span className="muted">{item.detail}</span>}
+                </div>
+                {item.action && (
+                  <button className="button button-secondary" onClick={() => onClip(item.action.start, item.action.end)}>
+                    <Scissors size={16} aria-hidden="true" />
+                    <span>{item.action.label}</span>
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 function OwnerAnalytics({ video }) {
   const [state, setState] = useState({ status: "idle" });
   if (!GOOGLE_CLIENT_ID || !video) return null;
@@ -564,7 +624,8 @@ export default function InsightsPanel({ insights, onRetry, onClip }) {
 
   return (
     <div className="insights">
-      <Card title="Estimated earnings" state={video} onRetry={() => onRetry("video")} note={ESTIMATE_NOTE}>
+      <Highlights insights={insights} onClip={onClip} />
+      <Card title="Estimated earnings" source="estimate" state={video} onRetry={() => onRetry("video")} note={ESTIMATE_NOTE}>
         {(data) => <Earnings data={data} />}
       </Card>
       <Card title="Compared with the channel" state={channel} onRetry={() => onRetry("channel")}>
@@ -573,11 +634,12 @@ export default function InsightsPanel({ insights, onRetry, onClip }) {
       <Card title="Most replayed moments" state={video} onRetry={() => onRetry("video")} wide>
         {(data) => <Moments data={data} onClip={onClip} />}
       </Card>
-      <Card title="Engagement and outlook" state={video} onRetry={() => onRetry("video")}>
+      <Card title="Engagement and outlook" source="mixed" state={video} onRetry={() => onRetry("video")}>
         {(data) => <Engagement data={data} />}
       </Card>
       <Card
         title="Likely audience"
+        source="estimate"
         state={comments?.status === "error" ? comments : audienceState}
         onRetry={() => onRetry("comments")}
         note="A guess from comment languages. Exact countries are only visible to the channel owner."
