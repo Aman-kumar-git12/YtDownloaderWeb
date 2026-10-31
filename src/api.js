@@ -65,31 +65,49 @@ export async function fetchThumbnailResolutions(url) {
   return data.data
 }
 
-export async function fetchDownloadProgress(taskId) {
-  try {
-    const data = await request(`/api/download/progress/${taskId}`, undefined, 'Unable to fetch download progress.')
-    return data
-  } catch {
-    return { status: 'downloading', percent: 0 }
+const POLL_INTERVAL_MS = 800
+const MAX_POLL_FAILURES = 5
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Downloads run as background jobs on the server: start the job, poll its
+// progress until it finishes, then let the browser fetch the finished file.
+async function runDownload(kind, body, onProgress, fallbackMessage) {
+  const { task_id: taskId } = await request(`/api/download/${kind}`, postBody(body), fallbackMessage)
+  let failures = 0
+
+  while (true) {
+    await sleep(POLL_INTERVAL_MS)
+    let job
+    try {
+      job = await request(`/api/download/progress/${taskId}`, undefined, 'Lost track of this download.')
+      failures = 0
+    } catch (err) {
+      if (++failures >= MAX_POLL_FAILURES) throw err
+      continue
+    }
+
+    onProgress?.(job)
+    if (job.status === 'completed') {
+      triggerBrowserDownload(taskId, job.filename)
+      return job
+    }
+    if (job.status === 'error') {
+      throw new Error(job.error || fallbackMessage)
+    }
   }
 }
 
-export async function downloadVideo(url, target, taskId) {
-  const data = await request('/api/download/video', postBody({ url, target, task_id: taskId }), 'Unable to download this video.')
-  triggerBrowserDownload(data.filename)
-  return data
+export function downloadVideo(url, target, onProgress) {
+  return runDownload('video', { url, target }, onProgress, 'Unable to download this video.')
 }
 
-export async function downloadAudio(url, target, taskId) {
-  const data = await request('/api/download/audio', postBody({ url, target, task_id: taskId }), 'Unable to download this audio.')
-  triggerBrowserDownload(data.filename)
-  return data
+export function downloadAudio(url, target, onProgress) {
+  return runDownload('audio', { url, target }, onProgress, 'Unable to download this audio.')
 }
 
-export async function downloadThumbnail(url, target, title, taskId) {
-  const data = await request('/api/download/thumbnail', postBody({ url, target, title, task_id: taskId }), 'Unable to download this thumbnail.')
-  triggerBrowserDownload(data.filename)
-  return data
+export function downloadThumbnail(url, target, onProgress) {
+  return runDownload('thumbnail', { url, target }, onProgress, 'Unable to download this thumbnail.')
 }
 
 function postBody(body) {
@@ -100,14 +118,14 @@ function postBody(body) {
   }
 }
 
-function triggerBrowserDownload(filename) {
-  if (!filename) return
+function triggerBrowserDownload(taskId, filename) {
   console.log(`🎉 [Browser Download] Saving file: ${filename}`)
 
-  const downloadUrl = `${API_BASE}/api/files/${encodeURIComponent(filename)}`
+  // The server sends the real filename in Content-Disposition and deletes the
+  // file once it has been delivered.
   const a = document.createElement('a')
-  a.href = downloadUrl
-  a.download = filename
+  a.href = `${API_BASE}/api/files/${encodeURIComponent(taskId)}`
+  a.download = filename || ''
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)

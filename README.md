@@ -1,16 +1,32 @@
-# React + Vite
+# YT Downloader — Web
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite + Tailwind frontend for the YT Downloader backend (`YtDownloaderBackend` repo). Paste a YouTube link to view its metadata and download video, audio or thumbnails, with live progress.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+cp .env.example .env      # set VITE_API_BASE_URL to your backend
+npm run dev               # http://localhost:5173
+```
 
-## React Compiler
+Make sure the backend's `FRONTEND_URL` includes this app's origin (CORS).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Scripts
 
-## Expanding the Oxlint configuration
+| Command | |
+| --- | --- |
+| `npm run dev` | Dev server with HMR |
+| `npm run build` | Production build into `dist/` |
+| `npm run preview` | Serve the production build |
+| `npm run lint` | Lint with oxlint |
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+## How downloads work
+
+1. `POST /api/download/<kind>` starts a background job and returns a `task_id`.
+2. The app polls `/api/download/progress/<task_id>` to show the progress bar.
+3. When the job completes, the browser fetches `/api/files/<task_id>`. The server deletes the file after sending it.
+
+See `src/api.js`.
+
+> Personal / educational use only. Downloading from YouTube may violate its Terms of Service.

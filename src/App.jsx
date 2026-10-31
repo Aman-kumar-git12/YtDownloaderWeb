@@ -41,8 +41,13 @@ import {
   downloadVideo,
   downloadAudio,
   downloadThumbnail,
-  fetchDownloadProgress,
 } from "./api";
+
+const DOWNLOADERS = {
+  video: downloadVideo,
+  audio: downloadAudio,
+  thumbnail: downloadThumbnail,
+};
 
 /* ─── Tabs config ─── */
 const TABS = [
@@ -62,8 +67,20 @@ function App() {
   const [success, setSuccess] = useState("");
   const [videoTitle, setVideoTitle] = useState("");
   const [cache, setCache] = useState({});
+  // Lives here (not in DownloadList) so switching tabs doesn't lose the progress UI
+  const [download, setDownload] = useState(null);
 
   const currentData = cache[activeTab] || null;
+  const isDownloadRunning = download?.status === "downloading";
+
+  // Elapsed-time counter for the running download
+  useEffect(() => {
+    if (!isDownloadRunning) return;
+    const timer = setInterval(() => {
+      setDownload((prev) => (prev ? { ...prev, elapsed: prev.elapsed + 1 } : prev));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isDownloadRunning]);
 
   // Keyboard shortcut (Cmd+K or Ctrl+K) to focus input
   useEffect(() => {
@@ -134,6 +151,7 @@ function App() {
   const handleDisconnect = () => {
     setConnected(false);
     setCache({});
+    setDownload(null);
     setError("");
     setSuccess("");
     setVideoTitle("");
@@ -184,44 +202,33 @@ function App() {
     if (connected) fetchTabData(activeTab, url);
   };
 
-  const handleDownloadVideo = async (resolution, taskId) => {
-    setError("");
-    try {
-      await downloadVideo(url, resolution, taskId);
-      setSuccess("Download completed — saved to your downloads.");
-      triggerConfetti();
-    } catch (err) {
-      setError(err.message || "Download failed");
-      throw err;
-    }
-    setTimeout(() => setSuccess(""), 4000);
-  };
+  const handleDownload = async (tab, key) => {
+    const id = Date.now();
+    // Only touch state that still belongs to this download (the user may have
+    // changed the link in the meantime).
+    const patch = (fields) =>
+      setDownload((prev) => (prev?.id === id ? { ...prev, ...fields } : prev));
+    const clearLater = (ms) =>
+      setTimeout(() => setDownload((prev) => (prev?.id === id ? null : prev)), ms);
 
-  const handleDownloadAudio = async (format, taskId) => {
     setError("");
-    try {
-      await downloadAudio(url, format, taskId);
-      setSuccess("Download completed — saved to your downloads.");
-      triggerConfetti();
-    } catch (err) {
-      setError(err.message || "Download failed");
-      throw err;
-    }
-    setTimeout(() => setSuccess(""), 4000);
-  };
+    setSuccess("");
+    setDownload({ id, tab, key, status: "downloading", backendStatus: "queued", elapsed: 0, percent: 0, speed: "" });
 
-  const handleDownloadThumbnail = async (resolution, taskId) => {
-    setError("");
     try {
-      const thumbUrl = currentData.urls[resolution];
-      await downloadThumbnail(thumbUrl, resolution, videoTitle, taskId);
+      await DOWNLOADERS[tab](url, key, (job) =>
+        patch({ percent: job.percent ?? 0, speed: job.speed || "", backendStatus: job.status })
+      );
+      patch({ status: "completed", percent: 100 });
       setSuccess("Download completed — saved to your downloads.");
       triggerConfetti();
+      setTimeout(() => setSuccess(""), 4000);
+      clearLater(4000);
     } catch (err) {
+      patch({ status: "error" });
       setError(err.message || "Download failed");
-      throw err;
+      clearLater(5000);
     }
-    setTimeout(() => setSuccess(""), 4000);
   };
 
   /* ═══════════════════════════════════════════
@@ -508,7 +515,9 @@ function App() {
                 {activeTab === "video" && currentData && (
                   <DownloadList
                     items={currentData.resolutions}
-                    onDownload={handleDownloadVideo}
+                    onDownload={(key) => handleDownload("video", key)}
+                    activeDownload={download?.tab === "video" ? download : null}
+                    busy={download !== null}
                     icon={Monitor}
                     emptyLabel="video resolutions"
                   />
@@ -517,7 +526,9 @@ function App() {
                   <DownloadList
                     items={currentData.formats}
                     descriptions={currentData.details}
-                    onDownload={handleDownloadAudio}
+                    onDownload={(key) => handleDownload("audio", key)}
+                    activeDownload={download?.tab === "audio" ? download : null}
+                    busy={download !== null}
                     icon={Headphones}
                     emptyLabel="audio formats"
                   />
@@ -525,7 +536,9 @@ function App() {
                 {activeTab === "thumbnail" && currentData && (
                   <DownloadList
                     items={currentData.resolutions}
-                    onDownload={handleDownloadThumbnail}
+                    onDownload={(key) => handleDownload("thumbnail", key)}
+                    activeDownload={download?.tab === "thumbnail" ? download : null}
+                    busy={download !== null}
                     icon={ImageIcon}
                     emptyLabel="thumbnail sizes"
                   />
@@ -555,7 +568,7 @@ function MetadataView({ data }) {
     {
       icon: <Calendar size={16} />,
       label: "Upload Date",
-      value: data.upload_date,
+      value: formatDate(data.upload_date),
     },
     { icon: <Clock size={16} />, label: "Duration", value: data.duration || "—" },
     {
@@ -566,25 +579,17 @@ function MetadataView({ data }) {
   ];
 
   const engagement = [
-    {
-      icon: <Eye size={16} />,
-      label: "Views",
-      value: data.views ? data.views.toLocaleString() : "Hidden",
-    },
-    {
-      icon: <ThumbsUp size={16} />,
-      label: "Likes",
-      value: data.likes ? data.likes.toLocaleString() : "Hidden",
-    },
+    { icon: <Eye size={16} />, label: "Views", value: formatCount(data.views) },
+    { icon: <ThumbsUp size={16} />, label: "Likes", value: formatCount(data.likes) },
     {
       icon: <MessageSquare size={16} />,
       label: "Comments",
-      value: data.comments ? data.comments.toLocaleString() : "Hidden",
+      value: formatCount(data.comments),
     },
     {
       icon: <Users size={16} />,
       label: "Subscribers",
-      value: data.subscribers ? data.subscribers.toLocaleString() : "Hidden",
+      value: formatCount(data.subscribers),
     },
   ];
 
@@ -683,65 +688,15 @@ function MetadataSection({ title, rows }) {
 /* ═══════════════════════════════════════════════════
    Download List
    ═══════════════════════════════════════════════════ */
-function DownloadList({ items, descriptions, onDownload, icon: Icon, emptyLabel }) {
-  const [activeDownload, setActiveDownload] = useState(null);
-  const activeTaskId = activeDownload?.taskId;
-  const isDownloadActive = activeDownload?.status === "downloading";
-
-  useEffect(() => {
-    let timerInterval = null;
-    let pollInterval = null;
-
-    if (isDownloadActive && activeTaskId) {
-      timerInterval = setInterval(() => {
-        setActiveDownload((prev) => (prev ? { ...prev, elapsed: prev.elapsed + 1 } : null));
-      }, 1000);
-
-      pollInterval = setInterval(async () => {
-        const prog = await fetchDownloadProgress(activeTaskId);
-        if (prog) {
-          setActiveDownload((prev) => {
-            if (!prev) return null;
-            return {
-              ...prev,
-              percent: prog.percent || prev.percent,
-              speed: prog.speed || prev.speed,
-              eta: prog.eta || prev.eta,
-              backendStatus: prog.status,
-            };
-          });
-        }
-      }, 600);
-    }
-
-    return () => {
-      if (timerInterval) clearInterval(timerInterval);
-      if (pollInterval) clearInterval(pollInterval);
-    };
-  }, [activeTaskId, isDownloadActive]);
-
-  const handleClick = async (key) => {
-    const taskId = "dl_" + Date.now();
-    setActiveDownload({
-      key,
-      taskId,
-      elapsed: 0,
-      percent: 0,
-      speed: "",
-      eta: "",
-      status: "downloading",
-    });
-
-    try {
-      await onDownload(key, taskId);
-      setActiveDownload((prev) => (prev ? { ...prev, status: "completed", percent: 100 } : null));
-      setTimeout(() => setActiveDownload(null), 4000);
-    } catch {
-      setActiveDownload((prev) => (prev ? { ...prev, status: "error" } : null));
-      setTimeout(() => setActiveDownload(null), 5000);
-    }
-  };
-
+function DownloadList({
+  items,
+  descriptions,
+  onDownload,
+  activeDownload,
+  busy,
+  icon: Icon,
+  emptyLabel,
+}) {
   const formatTime = (totalSeconds) => {
     const mins = Math.floor(totalSeconds / 60);
     const secs = totalSeconds % 60;
@@ -796,9 +751,11 @@ function DownloadList({ items, descriptions, onDownload, icon: Icon, emptyLabel 
                       </div>
                       <div className="progress-details-text">
                         <span>
-                          {activeDownload.backendStatus === "processing"
-                            ? "Merging video & audio format..."
-                            : `Downloading ${activeDownload.percent || 0}%`}
+                          {activeDownload.backendStatus === "queued"
+                            ? "Waiting for a free download slot..."
+                            : activeDownload.backendStatus === "processing"
+                              ? "Merging / converting file..."
+                              : `Downloading ${activeDownload.percent || 0}%`}
                         </span>
                         {activeDownload.speed && <span>{activeDownload.speed}</span>}
                       </div>
@@ -812,8 +769,8 @@ function DownloadList({ items, descriptions, onDownload, icon: Icon, emptyLabel 
                   className={`download-btn ${isDownloading ? "download-btn-loading" : ""} ${
                     isCompleted ? "download-btn-success" : ""
                   }`}
-                  onClick={() => handleClick(key)}
-                  disabled={activeDownload !== null}
+                  onClick={() => onDownload(key)}
+                  disabled={busy}
                 >
                   {isDownloading ? (
                     <>
@@ -858,6 +815,22 @@ function Feature({ icon, text }) {
 
 function Divider() {
   return <div className="feature-divider" />;
+}
+
+// 0 is a real count; only null/undefined means YouTube hid it
+function formatCount(value) {
+  return value == null ? "Hidden" : value.toLocaleString();
+}
+
+// "2024-03-05" -> "Mar 5, 2024" (parsed as local date so it doesn't shift a day)
+function formatDate(iso) {
+  if (!iso) return "—";
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function isYouTubeUrl(value) {
