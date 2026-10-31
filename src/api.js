@@ -10,7 +10,7 @@ async function request(path, options, fallbackMessage) {
     response = await fetch(`${API_BASE}${path}`, options)
   } catch (err) {
     console.error(`❌ [API Network Error] ${path}:`, err)
-    throw new Error('Cannot reach the backend. Start it with `python3 server.py` and try again.')
+    throw new Error("Can't reach the server. Check your connection and try again.")
   }
 
   if (!response.ok) {
@@ -31,6 +31,26 @@ async function request(path, options, fallbackMessage) {
   }
 }
 
+// Render's free plan sleeps after 15 idle minutes and takes up to a minute to
+// wake. Ping /health on page load; onSlow fires if it hasn't answered quickly.
+export async function wakeServer(onSlow) {
+  const slowTimer = setTimeout(() => onSlow?.(), 2500)
+  try {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        const response = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(30000) })
+        if (response.ok) return true
+      } catch {
+        // still waking up; retry
+      }
+      await sleep(3000)
+    }
+    return false
+  } finally {
+    clearTimeout(slowTimer)
+  }
+}
+
 async function getErrorMessage(response, fallbackMessage) {
   try {
     const body = await response.json()
@@ -40,9 +60,9 @@ async function getErrorMessage(response, fallbackMessage) {
     // Some proxies return HTML error pages; use the response status below.
   }
 
-  return response.status === 500
-    ? `The server could not process this video (HTTP 500). ${fallbackMessage}`
-    : `${fallbackMessage} (HTTP ${response.status})`
+  return response.status === 429
+    ? 'Too many requests. Wait a minute and try again.'
+    : fallbackMessage
 }
 
 export async function fetchMetadata(url) {

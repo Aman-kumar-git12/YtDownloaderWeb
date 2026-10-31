@@ -1,39 +1,15 @@
-import { useState, useCallback, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import { ArrowLeft, RotateCcw } from "lucide-react";
+import Logo from "./components/Logo";
+import Hero from "./components/Hero";
+import VideoSummary from "./components/VideoSummary";
+import FormatList from "./components/FormatList";
+import ThumbnailGrid from "./components/ThumbnailGrid";
+import DetailsPanel from "./components/DetailsPanel";
+import PencilMark from "./components/PencilMark";
 import {
-  Play,
-  Link2,
-  ArrowRight,
-  Zap,
-  Music2,
-  Image as ImageIcon,
-  ShieldCheck,
-  Monitor,
-  Headphones,
-  Info,
-  Download,
-  AlertTriangle,
-  CheckCircle,
-  FileText,
-  Hash,
-  User,
-  Users,
-  Calendar,
-  Clock,
-  AlignLeft,
-  Eye,
-  ThumbsUp,
-  MessageSquare,
-  Tag,
-  Folder,
-  Lock,
-  Radio,
-  BookOpen,
-  Settings,
-  Languages,
-} from "lucide-react";
-import confetti from "canvas-confetti";
-import {
+  wakeServer,
   fetchMetadata,
   fetchVideoResolutions,
   fetchAudioFormats,
@@ -42,6 +18,20 @@ import {
   downloadAudio,
   downloadThumbnail,
 } from "./api";
+import { isYouTubeUrl, normalizeUrl } from "./lib/format";
+
+const TABS = [
+  { id: "video", label: "Video" },
+  { id: "audio", label: "Audio" },
+  { id: "thumbnail", label: "Thumbnail" },
+  { id: "details", label: "Details" },
+];
+
+const LOADERS = {
+  video: fetchVideoResolutions,
+  audio: fetchAudioFormats,
+  thumbnail: fetchThumbnailResolutions,
+};
 
 const DOWNLOADERS = {
   video: downloadVideo,
@@ -49,29 +39,40 @@ const DOWNLOADERS = {
   thumbnail: downloadThumbnail,
 };
 
-/* ─── Tabs config ─── */
-const TABS = [
-  { id: "metadata", label: "Metadata", icon: Info },
-  { id: "video", label: "Video", icon: Monitor },
-  { id: "audio", label: "Audio", icon: Headphones },
-  { id: "thumbnail", label: "Thumbnail", icon: ImageIcon },
-];
+const initialUrl = new URLSearchParams(window.location.search).get("url") || "";
 
 function App() {
-  const [url, setUrl] = useState("");
-  const [activeTab, setActiveTab] = useState("metadata");
-  const [connected, setConnected] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [url, setUrl] = useState(initialUrl);
+  const [link, setLink] = useState(""); // the link that was analyzed
+  const [meta, setMeta] = useState(null);
+  const [panels, setPanels] = useState({}); // tab -> { status, data, error }
+  const [activeTab, setActiveTab] = useState("video");
+  const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [videoTitle, setVideoTitle] = useState("");
-  const [cache, setCache] = useState({});
-  // Lives here (not in DownloadList) so switching tabs doesn't lose the progress UI
+  const [serverWaking, setServerWaking] = useState(false);
   const [download, setDownload] = useState(null);
+  // Bumped on every new analysis so late responses for an old link are ignored
+  const requestId = useRef(0);
+  const autoStarted = useRef(false);
 
-  const currentData = cache[activeTab] || null;
   const isDownloadRunning = download?.status === "downloading";
+
+  // Wake the (possibly sleeping) server as soon as the page opens
+  useEffect(() => {
+    wakeServer(() => setServerWaking(true)).then(() => setServerWaking(false));
+  }, []);
+
+  // Cmd/Ctrl+K focuses the link field
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        document.getElementById("url-input")?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Elapsed-time counter for the running download
   useEffect(() => {
@@ -82,768 +83,263 @@ function App() {
     return () => clearInterval(timer);
   }, [isDownloadRunning]);
 
-  // Keyboard shortcut (Cmd+K or Ctrl+K) to focus input
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        document.getElementById("url-input")?.focus();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  const triggerConfetti = () => {
-    confetti({
-      particleCount: 50,
-      angle: 60,
-      spread: 55,
-      origin: { x: 0, y: 0.8 },
-      colors: ["#ff1744", "#ff3d61", "#e11d48"],
-    });
-    confetti({
-      particleCount: 50,
-      angle: 120,
-      spread: 55,
-      origin: { x: 1, y: 0.8 },
-      colors: ["#ff1744", "#ff3d61", "#e11d48"],
-    });
+  const loadPanel = async (tab, videoUrl, id) => {
+    setPanels((prev) => ({ ...prev, [tab]: { status: "loading" } }));
+    try {
+      const data = await LOADERS[tab](videoUrl);
+      if (id !== requestId.current) return;
+      setPanels((prev) => ({ ...prev, [tab]: { status: "ready", data } }));
+    } catch (err) {
+      if (id !== requestId.current) return;
+      setPanels((prev) => ({ ...prev, [tab]: { status: "error", error: err.message } }));
+    }
   };
 
-  const handleConnect = useCallback(
-    async (e) => {
-      e.preventDefault();
-      const normalizedUrl = url.trim();
-      if (!normalizedUrl) return;
-      if (!isYouTubeUrl(normalizedUrl)) {
-        setError("Enter a valid YouTube link, e.g. youtube.com/watch?v=…");
+  const analyze = async (rawValue) => {
+    const normalized = normalizeUrl(rawValue);
+    if (!normalized) return;
+    if (!isYouTubeUrl(normalized)) {
+      setError("That isn't a YouTube link. Paste one like youtube.com/watch?v=… or youtu.be/…");
+      return;
+    }
+
+    const id = ++requestId.current;
+    setError("");
+    setAnalyzing(true);
+    try {
+      const data = await fetchMetadata(normalized);
+      if (id !== requestId.current) return;
+      setLink(normalized);
+      setMeta(data);
+      setPanels({});
+      setActiveTab("video");
+      setDownload(null);
+      window.history.replaceState(null, "", `?url=${encodeURIComponent(normalized)}`);
+
+      // Load the other tabs one after another in the background (the server
+      // caches the video info, so these are quick) so switching tabs is instant.
+      for (const tab of ["video", "audio", "thumbnail"]) {
+        if (id !== requestId.current) return;
+        await loadPanel(tab, normalized, id);
+      }
+    } catch (err) {
+      if (id === requestId.current) setError(err.message || "This video couldn't be loaded. Try again.");
+    } finally {
+      if (id === requestId.current) setAnalyzing(false);
+    }
+  };
+
+  // Open a shared link like /?url=https://youtu.be/…
+  useEffect(() => {
+    if (initialUrl && !autoStarted.current) {
+      autoStarted.current = true;
+      analyze(initialUrl);
+    }
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    analyze(url);
+  };
+
+  // Pasting a YouTube link into the empty field (or using the Paste button) starts right away
+  const handlePaste = async (event) => {
+    let text;
+    if (event) {
+      if (url.trim()) return; // normal paste into existing text
+      text = event.clipboardData?.getData("text") || "";
+    } else {
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        document.getElementById("url-input")?.focus();
         return;
       }
-      setError("");
-      setSuccess("");
-      setCache({});
-      setVideoTitle("");
-      setIsSubmitting(true);
-      try {
-        // Fetch metadata first. Starting four independent yt-dlp extractions
-        // at once can trigger YouTube rate limits and bot checks. The other
-        // data is loaded only when its tab is opened.
-        const metadata = await fetchMetadata(normalizedUrl);
+    }
+    if (!text.trim()) return;
+    if (isYouTubeUrl(normalizeUrl(text))) {
+      event?.preventDefault();
+      setUrl(text.trim());
+      analyze(text);
+    } else if (!event) {
+      setUrl(text.trim());
+    }
+  };
 
-        setUrl(normalizedUrl);
-        setVideoTitle(metadata?.title || "");
-        setCache({ metadata });
-        setActiveTab("metadata");
-        setConnected(true);
-      } catch (err) {
-        setError(
-          err.message ||
-            "Could not analyze this link. Check the backend and try again."
-        );
-      } finally {
-        setIsSubmitting(false);
-      }
-    },
-    [url]
-  );
-
-  const handleDisconnect = () => {
-    setConnected(false);
-    setCache({});
+  const reset = (e) => {
+    e?.preventDefault();
+    requestId.current++;
+    setMeta(null);
+    setLink("");
+    setPanels({});
     setDownload(null);
     setError("");
-    setSuccess("");
-    setVideoTitle("");
+    setAnalyzing(false);
+    setUrl("");
+    window.history.replaceState(null, "", window.location.pathname);
+    requestAnimationFrame(() => document.getElementById("url-input")?.focus());
   };
 
-  const handleTabChange = (tabId) => {
-    setActiveTab(tabId);
-    setError("");
-    setSuccess("");
-    if (!cache[tabId] && connected) {
-      fetchTabData(tabId, url);
-    }
-  };
-
-  const fetchTabData = async (tab, videoUrl) => {
+  const selectTab = (tab) => {
     setActiveTab(tab);
-    setLoading(true);
-    setError("");
-    try {
-      let data;
-      switch (tab) {
-        case "metadata":
-          data = await fetchMetadata(videoUrl);
-          setVideoTitle(data.title);
-          break;
-        case "video":
-          data = await fetchVideoResolutions(videoUrl);
-          if (data.title) setVideoTitle(data.title);
-          break;
-        case "audio":
-          data = await fetchAudioFormats(videoUrl);
-          if (data.title) setVideoTitle(data.title);
-          break;
-        case "thumbnail":
-          data = await fetchThumbnailResolutions(videoUrl);
-          if (data.title) setVideoTitle(data.title);
-          break;
-      }
-      setCache((prev) => ({ ...prev, [tab]: data }));
-    } catch (err) {
-      setError(err.message || "Failed to fetch data.");
-    } finally {
-      setLoading(false);
-    }
+    if (tab !== "details" && !panels[tab]) loadPanel(tab, link, requestId.current);
   };
 
-  const retryCurrentTab = () => {
-    if (connected) fetchTabData(activeTab, url);
+  const handleTabKeys = (e) => {
+    const index = TABS.findIndex((t) => t.id === activeTab);
+    const next = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: TABS.length - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    const tab = TABS[(next + TABS.length) % TABS.length].id;
+    selectTab(tab);
+    document.getElementById(`tab-${tab}`)?.focus();
   };
 
   const handleDownload = async (tab, key) => {
     const id = Date.now();
-    // Only touch state that still belongs to this download (the user may have
-    // changed the link in the meantime).
-    const patch = (fields) =>
-      setDownload((prev) => (prev?.id === id ? { ...prev, ...fields } : prev));
-    const clearLater = (ms) =>
-      setTimeout(() => setDownload((prev) => (prev?.id === id ? null : prev)), ms);
+    // Only touch state that still belongs to this download
+    const patch = (fields) => setDownload((prev) => (prev?.id === id ? { ...prev, ...fields } : prev));
 
-    setError("");
-    setSuccess("");
-    setDownload({ id, tab, key, status: "downloading", backendStatus: "queued", elapsed: 0, percent: 0, speed: "" });
-
+    setDownload({ id, tab, key, status: "downloading", backendStatus: "queued", stage: null, elapsed: 0, percent: 0, speed: "" });
     try {
-      await DOWNLOADERS[tab](url, key, (job) =>
-        patch({ percent: job.percent ?? 0, speed: job.speed || "", backendStatus: job.status })
+      await DOWNLOADERS[tab](link, key, (job) =>
+        patch({ percent: job.percent ?? 0, speed: job.speed || "", stage: job.stage, backendStatus: job.status })
       );
       patch({ status: "completed", percent: 100 });
-      setSuccess("Download completed — saved to your downloads.");
-      triggerConfetti();
-      setTimeout(() => setSuccess(""), 4000);
-      clearLater(4000);
+      setTimeout(() => setDownload((prev) => (prev?.id === id ? null : prev)), 6000);
     } catch (err) {
-      patch({ status: "error" });
-      setError(err.message || "Download failed");
-      clearLater(5000);
+      patch({ status: "error", error: err.message || "The download failed. Try again." });
     }
   };
 
-  /* ═══════════════════════════════════════════
-     HERO (Not Connected) View
-     ═══════════════════════════════════════════ */
-  if (!connected) {
-    return (
-      <div className="app">
-        <div className="background-overlay" />
+  const renderPanel = () => {
+    if (activeTab === "details") return <DetailsPanel meta={meta} />;
 
-        <header className="top-header">
-          <div className="brand">
-            <div className="brand-icon">
-              <Play size={18} fill="white" />
+    const panel = panels[activeTab];
+    if (!panel || panel.status === "loading") {
+      return (
+        <ul className="skeleton" aria-label="Loading formats">
+          {[0, 1, 2, 3].map((i) => (
+            <li key={i} />
+          ))}
+        </ul>
+      );
+    }
+    if (panel.status === "error") {
+      return (
+        <div className="panel-error" role="alert">
+          <p>{panel.error}</p>
+          <button className="button button-secondary" onClick={() => loadPanel(activeTab, link, requestId.current)}>
+            <RotateCcw size={16} aria-hidden="true" />
+            <span>Try again</span>
+          </button>
+        </div>
+      );
+    }
+
+    const tabDownload = download?.tab === activeTab ? download : null;
+    const props = {
+      data: panel.data,
+      download: tabDownload,
+      busy: isDownloadRunning,
+      onDownload: (key) => handleDownload(activeTab, key),
+    };
+    return activeTab === "thumbnail" ? <ThumbnailGrid {...props} /> : <FormatList kind={activeTab} {...props} />;
+  };
+
+  return (
+    <MotionConfig reducedMotion="user">
+      <div className="app">
+        <a href="#main" className="skip-link">Skip to content</a>
+
+        <header className="topbar">
+          <div className="shell topbar-inner">
+            <a href="/" className="brand" onClick={reset}>
+              <Logo />
+              <span>YT Downloader</span>
+            </a>
+            <div className="topbar-actions">
+              {serverWaking && (
+                <span className="server-pill" role="status">
+                  <span className="pulse-dot" aria-hidden="true" />
+                  Waking up server
+                </span>
+              )}
+              {meta && (
+                <button className="button button-secondary" onClick={reset}>
+                  <ArrowLeft size={16} aria-hidden="true" />
+                  <span>New link</span>
+                </button>
+              )}
             </div>
-            <span>YT Downloader</span>
-          </div>
-          <div className="powered">
-            <Zap size={15} />
-            <span>Powered by yt-dlp</span>
           </div>
         </header>
 
-        <main className="hero-wrapper">
-          <motion.section
-            className="hero-card"
-            initial={{ opacity: 0, y: 30, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <div className="card-glow" />
+        <AnimatePresence mode="wait" initial={false}>
+          {!meta ? (
+            <motion.div
+              key="hero"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+            >
+              <Hero
+                url={url}
+                setUrl={setUrl}
+                onSubmit={handleSubmit}
+                onPaste={handlePaste}
+                analyzing={analyzing}
+                serverWaking={serverWaking}
+                error={error}
+              />
+            </motion.div>
+          ) : (
+            <motion.main
+              key="workspace"
+              id="main"
+              className="shell workspace"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: [0.2, 0.7, 0.2, 1] }}
+            >
+              <VideoSummary meta={meta} />
 
-            <div className="hero-content">
-              <motion.div
-                className="hero-logo"
-                animate={{ y: [0, -4, 0] }}
-                transition={{
-                  duration: 4,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                }}
-              >
-                <div className="logo-glow" />
-                <div className="hero-logo-inner">
-                  <Play size={48} fill="white" strokeWidth={0} />
-                </div>
-              </motion.div>
-
-              <motion.h1
-                className="hero-title"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.15, duration: 0.5 }}
-              >
-                <span>YouTube</span> <strong>Downloader</strong>
-              </motion.h1>
-
-              <motion.p
-                className="hero-description"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.25, duration: 0.5 }}
-              >
-                Paste any YouTube link to analyze metadata, download
-                high-definition video, extract raw audio, or save thumbnail
-                graphics.
-              </motion.p>
-
-              <motion.form
-                className="download-form"
-                onSubmit={handleConnect}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.35, duration: 0.5 }}
-              >
-                <div className="input-box">
-                  <Link2 className="input-icon" size={23} />
-                  <input
-                    id="url-input"
-                    type="url"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="Paste a YouTube URL..."
-                    aria-label="YouTube URL"
-                    autoComplete="url"
-                    inputMode="url"
-                  />
-                  <div className="shortcut">
-                    <kbd>⌘</kbd>
-                    <kbd>K</kbd>
-                  </div>
-                </div>
-
-                <button
-                  className="analyze-button"
-                  type="submit"
-                  disabled={!url.trim() || isSubmitting}
-                >
-                  {isSubmitting ? (
-                    <span className="analyzing-state">
-                      <span>Analyzing</span>
-                      <span className="animated-dots">
-                        <span className="dot dot-1">.</span>
-                        <span className="dot dot-2">.</span>
-                        <span className="dot dot-3">.</span>
-                      </span>
-                    </span>
-                  ) : (
-                    <>
-                      <span>Analyze</span>
-                      <ArrowRight size={19} strokeWidth={2.4} />
-                    </>
-                  )}
-                </button>
-              </motion.form>
-
-              {/* Error */}
-              <AnimatePresence>
-                {error && (
-                  <motion.div
-                    className="alert alert-error"
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                  >
-                    <AlertTriangle size={16} />
-                    <span>{error}</span>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Features */}
-              <motion.div
-                className="feature-row"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.45, duration: 0.5 }}
-              >
-                <Feature icon={<Zap size={18} />} text="HD Quality" />
-                <Divider />
-                <Feature icon={<Music2 size={18} />} text="Extract Audio" />
-                <Divider />
-                <Feature
-                  icon={<ImageIcon size={18} />}
-                  text="Get Thumbnails"
-                />
-                <Divider />
-                <Feature
-                  icon={<ShieldCheck size={18} />}
-                  text="Fast & Reliable"
-                />
-              </motion.div>
-            </div>
-          </motion.section>
-        </main>
-      </div>
-    );
-  }
-
-  /* ═══════════════════════════════════════════
-     CONNECTED View — Tabs + Content
-     ═══════════════════════════════════════════ */
-  return (
-    <div className="app">
-      <div className="background-overlay" />
-
-      <header className="top-header">
-        <div className="brand">
-          <div className="brand-icon">
-            <Play size={18} fill="white" />
-          </div>
-          <span>YT Downloader</span>
-        </div>
-        <div className="powered">
-          <span className="connected-badge">
-            <span className="connected-dot" />
-            Connected
-          </span>
-        </div>
-      </header>
-
-      <main className="dashboard-wrapper">
-        <motion.div
-          className="dashboard-card"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
-          {/* Sticky Dashboard Navigation (Active link bar + Tab bar) */}
-          <div className="sticky-dashboard-nav">
-            {/* Active URL bar */}
-            <div className="active-url-bar">
-              <div className="active-url-info">
-                <span className="connected-dot" />
-                <span className="active-url-text">
-                  Active: <strong>{videoTitle || url}</strong>
-                </span>
+              <div className="tabs" role="tablist" aria-label="What to save" onKeyDown={handleTabKeys}>
+                {TABS.map((tab) => {
+                  const selected = tab.id === activeTab;
+                  return (
+                    <button
+                      key={tab.id}
+                      id={`tab-${tab.id}`}
+                      role="tab"
+                      aria-selected={selected}
+                      aria-controls="tab-panel"
+                      tabIndex={selected ? 0 : -1}
+                      className={`tab ${selected ? "is-selected" : ""}`}
+                      onClick={() => selectTab(tab.id)}
+                    >
+                      {tab.label}
+                      {selected && (
+                        <motion.span layoutId="tab-mark" className="tab-mark" transition={{ type: "spring", stiffness: 420, damping: 34 }}>
+                          <PencilMark shape="underline" />
+                        </motion.span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-              <button className="change-link-btn" onClick={handleDisconnect}>
-                Change Link
-              </button>
-            </div>
 
-            {/* Tab Bar */}
-            <div className="tab-bar">
-              {TABS.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => handleTabChange(tab.id)}
-                    className={`tab-item ${isActive ? "tab-active" : ""}`}
-                  >
-                  <Icon size={16} />
-                  {tab.label}
-                  {isActive && (
-                    <motion.div
-                      layoutId="activeTab"
-                      className="tab-underline"
-                      transition={{
-                        type: "spring",
-                        stiffness: 380,
-                        damping: 30,
-                      }}
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-          {/* Alerts */}
-          <AnimatePresence>
-            {error && (
-              <motion.div
-                className="alert alert-error"
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-              >
-                <AlertTriangle size={16} />
-                <span>{error}</span>
-                <button className="retry-btn" onClick={retryCurrentTab}>
-                  Retry
-                </button>
-              </motion.div>
-            )}
-            {success && (
-              <motion.div
-                className="alert alert-success"
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-              >
-                <CheckCircle size={16} />
-                <span>{success}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Loading */}
-          {loading && (
-            <div className="loading-state">
-              <div className="spinner" />
-              <span>Analyzing video formats...</span>
-            </div>
+              <section id="tab-panel" role="tabpanel" aria-labelledby={`tab-${activeTab}`} className="panel">
+                {renderPanel()}
+              </section>
+            </motion.main>
           )}
-
-          {/* Tab Content */}
-          {!loading && (
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activeTab}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.2 }}
-              >
-                {activeTab === "metadata" && currentData && (
-                  <MetadataView data={currentData} />
-                )}
-                {activeTab === "video" && currentData && (
-                  <DownloadList
-                    items={currentData.resolutions}
-                    onDownload={(key) => handleDownload("video", key)}
-                    activeDownload={download?.tab === "video" ? download : null}
-                    busy={download !== null}
-                    icon={Monitor}
-                    emptyLabel="video resolutions"
-                  />
-                )}
-                {activeTab === "audio" && currentData && (
-                  <DownloadList
-                    items={currentData.formats}
-                    descriptions={currentData.details}
-                    onDownload={(key) => handleDownload("audio", key)}
-                    activeDownload={download?.tab === "audio" ? download : null}
-                    busy={download !== null}
-                    icon={Headphones}
-                    emptyLabel="audio formats"
-                  />
-                )}
-                {activeTab === "thumbnail" && currentData && (
-                  <DownloadList
-                    items={currentData.resolutions}
-                    onDownload={(key) => handleDownload("thumbnail", key)}
-                    activeDownload={download?.tab === "thumbnail" ? download : null}
-                    busy={download !== null}
-                    icon={ImageIcon}
-                    emptyLabel="thumbnail sizes"
-                  />
-                )}
-                {!currentData && !loading && (
-                  <div className="empty-state">
-                    No data available. Try fetching again.
-                  </div>
-                )}
-              </motion.div>
-            </AnimatePresence>
-          )}
-        </motion.div>
-      </main>
-    </div>
+        </AnimatePresence>
+      </div>
+    </MotionConfig>
   );
-}
-
-/* ═══════════════════════════════════════════════════
-   Metadata View
-   ═══════════════════════════════════════════════════ */
-function MetadataView({ data }) {
-  const basicInfo = [
-    { icon: <FileText size={16} />, label: "Title", value: data.title },
-    { icon: <Hash size={16} />, label: "Video ID", value: data.video_id },
-    { icon: <User size={16} />, label: "Channel", value: data.channel },
-    {
-      icon: <Calendar size={16} />,
-      label: "Upload Date",
-      value: formatDate(data.upload_date),
-    },
-    { icon: <Clock size={16} />, label: "Duration", value: data.duration || "—" },
-    {
-      icon: <AlignLeft size={16} />,
-      label: "Description",
-      value: data.description_snippet || "—",
-    },
-  ];
-
-  const engagement = [
-    { icon: <Eye size={16} />, label: "Views", value: formatCount(data.views) },
-    { icon: <ThumbsUp size={16} />, label: "Likes", value: formatCount(data.likes) },
-    {
-      icon: <MessageSquare size={16} />,
-      label: "Comments",
-      value: formatCount(data.comments),
-    },
-    {
-      icon: <Users size={16} />,
-      label: "Subscribers",
-      value: formatCount(data.subscribers),
-    },
-  ];
-
-  const technical = [
-    {
-      icon: <Tag size={16} />,
-      label: "Tags",
-      value: data.tags?.length
-        ? data.tags.slice(0, 8).join(", ") +
-          (data.tags.length > 8 ? "…" : "")
-        : "None",
-    },
-    {
-      icon: <Folder size={16} />,
-      label: "Category",
-      value: data.categories?.join(", ") || "None",
-    },
-    { icon: <Lock size={16} />, label: "Privacy", value: data.privacy },
-    { icon: <FileText size={16} />, label: "License", value: data.license },
-    {
-      icon: <AlertTriangle size={16} />,
-      label: "Age Restricted",
-      value: data.age_restricted ? "Yes" : "No",
-    },
-    { icon: <Radio size={16} />, label: "Live Status", value: data.live_status },
-    {
-      icon: <BookOpen size={16} />,
-      label: "Chapters",
-      value:
-        data.total_chapters > 0
-          ? `${data.total_chapters} chapters`
-          : "None",
-    },
-    {
-      icon: <Settings size={16} />,
-      label: "Formats",
-      value: `${data.total_formats} streams`,
-    },
-    {
-      icon: <Languages size={16} />,
-      label: "Subtitles",
-      value: data.subtitles?.length ? data.subtitles.join(", ") : "None",
-    },
-  ];
-
-  return (
-    <div className="metadata-grid">
-      {/* Thumbnail + Engagement */}
-      <div className="metadata-sidebar">
-        {data.thumbnail && (
-          <div className="thumbnail-preview">
-            <img src={data.thumbnail} alt="Thumbnail" />
-          </div>
-        )}
-        <div className="stat-grid">
-          {engagement.map((item) => (
-            <div key={item.label} className="stat-card">
-              <div className="stat-label">
-                {item.icon}
-                <span>{item.label}</span>
-              </div>
-              <span className="stat-value">{item.value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Info Sections */}
-      <div className="metadata-main">
-        <MetadataSection title="Basic Information" rows={basicInfo} />
-        <MetadataSection title="Technical Details" rows={technical} />
-      </div>
-    </div>
-  );
-}
-
-function MetadataSection({ title, rows }) {
-  return (
-    <div className="info-section">
-      <div className="info-section-header">
-        <h3>{title}</h3>
-      </div>
-      <div className="info-section-body">
-        {rows.map((row, i) => (
-          <div key={i} className="info-row">
-            <span className="info-row-icon">{row.icon}</span>
-            <span className="info-row-label">{row.label}</span>
-            <span className="info-row-value">{row.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════
-   Download List
-   ═══════════════════════════════════════════════════ */
-function DownloadList({
-  items,
-  descriptions,
-  onDownload,
-  activeDownload,
-  busy,
-  icon: Icon,
-  emptyLabel,
-}) {
-  const formatTime = (totalSeconds) => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-  };
-
-  const entries = Object.entries(items || {});
-
-  if (entries.length === 0) {
-    return <div className="empty-state">No {emptyLabel} found.</div>;
-  }
-
-  return (
-    <div>
-      <div className="list-count">
-        {entries.length} {entries.length === 1 ? "option" : "options"} available
-      </div>
-      <div className="download-list">
-        {entries.map(([key, size]) => {
-          const isCurrent = activeDownload?.key === key;
-          const isDownloading = isCurrent && activeDownload.status === "downloading";
-          const isCompleted = isCurrent && activeDownload.status === "completed";
-          const isError = isCurrent && activeDownload.status === "error";
-
-          return (
-            <div key={key} className={`download-row ${isCurrent ? "download-row-active" : ""}`}>
-              <div className="download-row-left">
-                <div className="download-row-icon">
-                  <Icon size={18} />
-                </div>
-                <div>
-                  <div className="download-row-title-wrap">
-                    <span className="download-row-name">{key}</span>
-                    {isDownloading && (
-                      <span className="live-timer-badge">
-                        ⏱️ {formatTime(activeDownload.elapsed)}
-                      </span>
-                    )}
-                  </div>
-                  {descriptions?.[key] && (
-                    <span className="download-row-desc">{descriptions[key]}</span>
-                  )}
-                  {isDownloading && (
-                    <div className="live-progress-container">
-                      <div className="progress-bar-bg">
-                        <div
-                          className="progress-bar-fill"
-                          style={{
-                            width: `${Math.max(activeDownload.percent || 5, 5)}%`,
-                          }}
-                        />
-                      </div>
-                      <div className="progress-details-text">
-                        <span>
-                          {activeDownload.backendStatus === "queued"
-                            ? "Waiting for a free download slot..."
-                            : activeDownload.backendStatus === "processing"
-                              ? "Merging / converting file..."
-                              : `Downloading ${activeDownload.percent || 0}%`}
-                        </span>
-                        {activeDownload.speed && <span>{activeDownload.speed}</span>}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="download-row-right">
-                <span className="download-row-size">{size}</span>
-                <button
-                  className={`download-btn ${isDownloading ? "download-btn-loading" : ""} ${
-                    isCompleted ? "download-btn-success" : ""
-                  }`}
-                  onClick={() => onDownload(key)}
-                  disabled={busy}
-                >
-                  {isDownloading ? (
-                    <>
-                      <div className="spinner-sm" />
-                      <span>{formatTime(activeDownload.elapsed)}</span>
-                    </>
-                  ) : isCompleted ? (
-                    <>
-                      <CheckCircle size={16} />
-                      <span>Saved ({formatTime(activeDownload.elapsed)})</span>
-                    </>
-                  ) : isError ? (
-                    <>
-                      <AlertTriangle size={16} />
-                      <span>Failed</span>
-                    </>
-                  ) : (
-                    <>
-                      <Download size={16} />
-                      <span>Download</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Helpers ─── */
-function Feature({ icon, text }) {
-  return (
-    <div className="feature">
-      <div className="feature-icon">{icon}</div>
-      <span>{text}</span>
-    </div>
-  );
-}
-
-function Divider() {
-  return <div className="feature-divider" />;
-}
-
-// 0 is a real count; only null/undefined means YouTube hid it
-function formatCount(value) {
-  return value == null ? "Hidden" : value.toLocaleString();
-}
-
-// "2024-03-05" -> "Mar 5, 2024" (parsed as local date so it doesn't shift a day)
-function formatDate(iso) {
-  if (!iso) return "—";
-  const [year, month, day] = iso.split("-").map(Number);
-  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function isYouTubeUrl(value) {
-  try {
-    const hostname = new URL(value).hostname.replace(/^www\./, "").toLowerCase();
-    return (
-      hostname === "youtube.com" ||
-      hostname.endsWith(".youtube.com") ||
-      hostname === "youtu.be"
-    );
-  } catch {
-    return false;
-  }
 }
 
 export default App;
