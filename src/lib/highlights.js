@@ -9,12 +9,12 @@ export function buildHighlights({ video, channel, comments, transcript }) {
   const ch = channel?.this_video;
   if (ch?.outlier_score != null && !ch.older_than_sample) {
     const s = ch.outlier_score;
-    const x = s >= 10 ? Math.round(s) : s;
+    const x = s >= 10 ? Math.round(s).toLocaleString() : s;
     if (s >= 3) add(100, "good", `A breakout: ${x}× the channel’s usual views`, `Their recent uploads get about ${formatCompact(channel.recent.median_views)} views each.`);
     else if (s >= 1.5) add(80, "good", `Beating the channel’s usual by ${x}×`, `Recent uploads get about ${formatCompact(channel.recent.median_views)} views each.`);
     else if (s < 0.67) add(85, "warn", `Underperforming: ${x}× the channel’s usual views`, `Recent uploads get about ${formatCompact(channel.recent.median_views)} views each.`);
   } else if (ch?.outlier_score >= 3) {
-    add(70, "good", `One of the channel’s biggest videos (${Math.round(ch.outlier_score)}× recent uploads)`, "It’s older, so it has had years to collect views.");
+    add(70, "good", `One of the channel’s biggest videos (${Math.round(ch.outlier_score).toLocaleString()}× recent uploads)`, "It’s older, so it has had years to collect views.");
   }
 
   if (video) {
