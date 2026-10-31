@@ -3,6 +3,7 @@
 Insights for the video you're watching. It opens with **What stands out**: the 4 most important findings
 (good signs, warnings and things worth knowing), then estimated earnings, how it compares with the channel,
 the most replayed moments (click to jump), engagement, comment mood and the transcript's topics.
+Two tabs: **Analytics** (the insights) and **Details** (numbers, upload date, length, quality, description, clickable chapters, tags and caption languages).
 It is analysis only; it has no download features, so it fits the Chrome Web Store rules.
 
 ## Try it locally

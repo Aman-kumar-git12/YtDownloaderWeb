@@ -32,7 +32,7 @@ const clock = (s) => {
 const row = (label, value) => h("div", { class: "row" }, h("span", { class: "muted" }, label), h("span", { class: "num" }, value));
 
 async function get(path, url) {
-  const response = await fetch(`${API_BASE}/api/insights${path}?url=${encodeURIComponent(url)}`);
+  const response = await fetch(`${API_BASE}${path}?url=${encodeURIComponent(url)}`);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(response.status === 429 ? "Too many lookups. Wait a minute and try again." : body.detail || "Couldn't analyse this video.");
@@ -51,7 +51,7 @@ let currentUrl = "";
 
 function loadPart(name, retry = false) {
   if (!parts[name] || retry) {
-    const path = name === "video" ? "" : `/${name}`;
+    const path = { video: "/api/insights", details: "/api/metadata" }[name] || `/api/insights/${name}`;
     failed.delete(name);
     parts[name] = get(path, currentUrl).then((data) => {
       partData[name] = data;
@@ -164,13 +164,12 @@ async function main() {
   const highlights = highlightsCard(tab.id);
   onPartChange = highlights.render;
   const video = loadPart("video");
-  for (const p of ["channel", "comments", "transcript"]) loadPart(p).catch(() => {});
+  for (const p of ["channel", "comments", "transcript", "details"]) loadPart(p).catch(() => {});
   highlights.render();
   const titleCard = h("section", { class: "card" }, h("div", { class: "skeleton" }));
   video.then((d) => titleCard.replaceChildren(h("h1", {}, d.title), h("p", { class: "muted small" }, `${d.channel} · ${compact(d.views)} views`))).catch(() => titleCard.remove());
 
-  app.replaceChildren(
-    titleCard,
+  const analyticsPanel = h("div", { class: "panel", id: "panel-analytics", role: "tabpanel", "aria-labelledby": "tab-analytics" },
     highlights.el,
     card("Estimated earnings", "video", (d) => [
       h("p", { class: "hero" }, range(d.earnings.total)),
@@ -230,6 +229,131 @@ async function main() {
         : h("p", { class: "muted" }, "No captions to read.")
     )
   );
+  mountTabs(titleCard, analyticsPanel, detailsPanel(tab.id));
+}
+
+// ─── Details tab: facts about the video itself (all real data) ───
+
+const CHIP_LIMIT = 30;
+
+function detailsPanel(tabId) {
+  return h("div", { class: "panel", id: "panel-details", role: "tabpanel", "aria-labelledby": "tab-details", hidden: "" },
+    card("Numbers", "details", (d) => [
+      row("Views", full(d.views)),
+      row("Likes", full(d.likes)),
+      row("Comments", full(d.comments)),
+      row("Channel subscribers", full(d.subscribers)),
+    ]),
+    card("Video", "details", (d) => [
+      row("Uploaded", d.upload_date ? new Date(`${d.upload_date}T00:00`).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "Unknown"),
+      row("Length", d.duration_seconds ? clock(d.duration_seconds) : "Unknown"),
+      row("Category", d.category || "None"),
+      d.max_height && row("Best quality", `${d.max_height}p${d.fps ? ` at ${d.fps} fps` : ""}`),
+      d.language && row("Spoken language", languageName(d.language)),
+      row("Visibility", d.privacy),
+      row("License", d.license),
+      row("Live", d.live_status),
+      row("Age-restricted", d.age_restricted ? "Yes" : "No"),
+      h("div", { class: "row" }, h("span", { class: "muted" }, "Video ID"),
+        h("button", { class: "copy num", title: "Copy video ID", onclick: (e) => copy(e.currentTarget, d.video_id) }, d.video_id)),
+    ]),
+    card("Description", "details", (d) => {
+      const text = (d.description || "").trim();
+      if (!text) return h("p", { class: "muted" }, "No description.");
+      const short = text.length > 280;
+      return short
+        ? h("details", { class: "desc" }, h("summary", {}, h("span", { class: "desc-preview" }, text.slice(0, 280) + "…"), h("span", { class: "more" }, "Show more")), h("p", { class: "desc-full" }, text))
+        : h("p", { class: "desc-full" }, text);
+    }),
+    card("Chapters", "details", (d) =>
+      d.chapters?.length
+        ? [
+            ...d.chapters.map((c) =>
+              h("button", { class: "moment", onclick: () => seek(tabId, c.start) },
+                h("span", { class: "num chapter-time" }, clock(c.start)), h("span", {}, c.title))),
+            h("p", { class: "note" }, "Click a chapter to jump to it."),
+          ]
+        : h("p", { class: "muted" }, "This video has no chapters.")
+    ),
+    card("Tags", "details", (d) =>
+      d.tags?.length
+        ? h("ul", { class: "chips" }, ...d.tags.slice(0, CHIP_LIMIT).map((t) => h("li", {}, t)),
+            d.tags.length > CHIP_LIMIT && h("li", { class: "muted" }, `+${d.tags.length - CHIP_LIMIT} more`))
+        : h("p", { class: "muted" }, "No tags.")
+    ),
+    card("Captions", "details", (d) =>
+      d.subtitles?.length
+        ? h("ul", { class: "chips" }, ...d.subtitles.map((code) => h("li", {}, languageName(code))))
+        : h("p", { class: "muted" }, "The creator hasn’t added captions (YouTube’s automatic ones may still exist).")
+    )
+  );
+}
+
+const full = (n) => (n == null ? "Hidden" : n.toLocaleString());
+
+function languageName(code) {
+  try {
+    return new Intl.DisplayNames(undefined, { type: "language" }).of(code);
+  } catch {
+    return code;
+  }
+}
+
+async function copy(button, text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    button.dataset.copied = "true";
+    setTimeout(() => delete button.dataset.copied, 1500);
+  } catch {
+    // clipboard blocked; the ID is still visible to select
+  }
+}
+
+// ─── Analytics / Details tabs ───
+
+const TABS = [
+  { id: "analytics", label: "Analytics" },
+  { id: "details", label: "Details" },
+];
+
+function mountTabs(titleCard, analyticsPanel, detailsPanelEl) {
+  const panels = { analytics: analyticsPanel, details: detailsPanelEl };
+  const buttons = TABS.map((t) =>
+    h("button", { role: "tab", id: `tab-${t.id}`, "aria-controls": `panel-${t.id}`, class: "tab", onclick: () => select(t.id) }, t.label));
+  const bar = h("div", { class: "tabs", role: "tablist", "aria-label": "View" }, ...buttons);
+
+  bar.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    const i = TABS.findIndex((t) => t.id === current);
+    const next = TABS[(i + (e.key === "ArrowRight" ? 1 : -1) + TABS.length) % TABS.length].id;
+    select(next);
+    document.getElementById(`tab-${next}`).focus();
+  });
+
+  let current = "analytics";
+  function select(id) {
+    current = id;
+    TABS.forEach((t, i) => {
+      const on = t.id === id;
+      buttons[i].setAttribute("aria-selected", String(on));
+      buttons[i].tabIndex = on ? 0 : -1;
+      panels[t.id].hidden = !on;
+    });
+    try {
+      localStorage.setItem("viewlens-tab", id);
+    } catch {
+      // storage unavailable; the choice just isn't remembered
+    }
+  }
+
+  let saved = "analytics";
+  try {
+    saved = localStorage.getItem("viewlens-tab") || "analytics";
+  } catch {
+    // ignore
+  }
+  select(panels[saved] ? saved : "analytics");
+  app.replaceChildren(titleCard, bar, analyticsPanel, detailsPanelEl);
 }
 
 main();
