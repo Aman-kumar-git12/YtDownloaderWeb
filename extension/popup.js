@@ -484,7 +484,7 @@ function analyticsPanel(tabId) {
             d.speech_share != null && row("Talking time", `${d.speech_share}%`),
             row("Main topics", d.keywords.slice(0, 4).map((k) => k.word).join(", ") || "Unclear"),
           ]
-        : h("p", { class: "muted" }, "No captions to read.")
+        : h("p", { class: "muted" }, d.reason === "blocked" ? "YouTube didn’t let the server read the captions right now. Try again in a few minutes." : "This video has no captions to read.")
     )
   );
 }

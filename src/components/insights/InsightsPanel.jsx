@@ -378,7 +378,15 @@ function Audience({ comments, video }) {
 }
 
 function Transcript({ data }) {
-  if (!data.available) return <p className="muted">This video has no captions to read.</p>;
+  if (!data.available) {
+    return (
+      <p className="muted">
+        {data.reason === "blocked"
+          ? "YouTube didn’t let the server read the captions right now. Try again in a few minutes."
+          : "This video has no captions to read."}
+      </p>
+    );
+  }
   const promise = data.title_words_in_first_minute;
   return (
     <>
