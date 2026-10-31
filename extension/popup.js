@@ -1,4 +1,5 @@
 import { API_BASE } from "./config.js";
+import { buildHighlights } from "./lib/highlights.js";
 
 const app = document.getElementById("app");
 const VIDEO_URL = /^https:\/\/(www\.|m\.)?youtube\.com\/(watch\?|shorts\/)|^https:\/\/youtu\.be\//;
@@ -39,21 +40,79 @@ async function get(path, url) {
   return body.data;
 }
 
+const SOURCE_LABELS = { real: "Real data", estimate: "Estimate", mixed: "Real + estimates" };
+
+// Each insight part is fetched once and shared by every card that uses it
+const parts = {};
+const partData = {};
+const failed = new Set();
+let onPartChange = () => {};
+let currentUrl = "";
+
+function loadPart(name, retry = false) {
+  if (!parts[name] || retry) {
+    const path = name === "video" ? "" : `/${name}`;
+    failed.delete(name);
+    parts[name] = get(path, currentUrl).then((data) => {
+      partData[name] = data;
+      onPartChange();
+      return data;
+    });
+    parts[name].catch(() => {
+      failed.add(name);
+      onPartChange();
+    });
+  }
+  return parts[name];
+}
+
 // A card that fills itself once its request finishes
-function card(title, load, render) {
-  const el = h("section", { class: "card" }, h("h2", {}, title), h("div", { class: "skeleton big" }), h("div", { class: "skeleton" }));
-  const run = () =>
-    load()
-      .then((data) => el.replaceChildren(h("h2", {}, title), ...[render(data)].flat().filter((x) => x != null && x !== false && x !== "")))
+function card(title, part, render, source = "real") {
+  const head = () => h("div", { class: "card-head" }, h("h2", {}, title), h("span", { class: `source source-${source}` }, SOURCE_LABELS[source]));
+  const el = h("section", { class: "card" }, head(), h("div", { class: "skeleton big" }), h("div", { class: "skeleton" }));
+  const run = (retry) =>
+    loadPart(part, retry)
+      .then((data) => el.replaceChildren(head(), ...[render(data)].flat().filter((x) => x != null && x !== false && x !== "")))
       .catch((err) =>
         el.replaceChildren(
-          h("h2", {}, title),
+          head(),
           h("p", { class: "muted" }, err.message),
-          h("button", { class: "retry", onclick: () => { el.replaceChildren(h("h2", {}, title), h("div", { class: "skeleton" })); run(); } }, "Try again")
+          h("button", { class: "retry", onclick: () => { el.replaceChildren(head(), h("div", { class: "skeleton" })); run(true); } }, "Try again")
         )
       );
-  run();
+  run(false);
   return el;
+}
+
+const TONE = {
+  good: { icon: "↗", label: "Good sign" },
+  warn: { icon: "!", label: "Watch out" },
+  info: { icon: "i", label: "Worth knowing" },
+};
+
+// "What stands out": the most important findings, refreshed as each part arrives
+function highlightsCard(tabId) {
+  const el = h("section", { class: "card highlights" });
+  const render = () => {
+    const items = buildHighlights(partData).slice(0, 4);
+    const loading = ["video", "channel", "comments", "transcript"].some((p) => !(p in partData) && !failed.has(p));
+    const pending = loading && h("span", { class: "muted small" }, "Still reading…");
+    el.replaceChildren(
+      h("div", { class: "card-head" }, h("h2", {}, "What stands out"), pending),
+      ...(items.length
+        ? items.map((item) =>
+            h("div", { class: `hl hl-${item.tone}` },
+              h("span", { class: "hl-icon", role: "img", "aria-label": TONE[item.tone].label }, TONE[item.tone].icon),
+              h("div", {},
+                h("strong", {}, item.title),
+                item.detail && h("span", { class: "muted small" }, item.detail),
+                item.action && h("button", { class: "retry jump", onclick: () => seek(tabId, item.action.start) }, "▶ Jump to it")))
+          )
+        : [loading ? h("div", { class: "skeleton" }) : h("p", { class: "muted" }, "Nothing unusual; this video is performing as expected.")])
+    );
+  };
+  render();
+  return { el, render };
 }
 
 function spark(values) {
@@ -101,20 +160,26 @@ async function main() {
     return;
   }
 
-  const video = get("", url);
+  currentUrl = url;
+  const highlights = highlightsCard(tab.id);
+  onPartChange = highlights.render;
+  const video = loadPart("video");
+  for (const p of ["channel", "comments", "transcript"]) loadPart(p).catch(() => {});
+  highlights.render();
   const titleCard = h("section", { class: "card" }, h("div", { class: "skeleton" }));
   video.then((d) => titleCard.replaceChildren(h("h1", {}, d.title), h("p", { class: "muted small" }, `${d.channel} · ${compact(d.views)} views`))).catch(() => titleCard.remove());
 
   app.replaceChildren(
     titleCard,
-    card("Estimated earnings", () => video, (d) => [
+    highlights.el,
+    card("Estimated earnings", "video", (d) => [
       h("p", { class: "hero" }, range(d.earnings.total)),
       row("Per 1,000 views", range(d.earnings.rpm)),
       d.earnings.next_30_days && row("Next 30 days", range(d.earnings.next_30_days)),
       d.earnings.sponsorship && row("Sponsor deal", range(d.earnings.sponsorship)),
       h("p", { class: "note" }, "Estimate from public data. Only the channel owner sees real earnings."),
-    ]),
-    card("Compared with the channel", () => get("/channel", url), (d) => [
+    ], "estimate"),
+    card("Compared with the channel", "channel", (d) => [
       d.this_video.outlier_score != null && h("p", { class: "hero" }, `${d.this_video.outlier_score >= 10 ? Math.round(d.this_video.outlier_score) : d.this_video.outlier_score}×`),
       h("p", { class: "muted small" }, `the channel's usual (median ${compact(d.recent.median_views)} views over the last ${d.recent.count} uploads)`),
       row("Subscribers", compact(d.subscribers)),
@@ -122,7 +187,7 @@ async function main() {
       d.profile && row("Channel created", d.profile.created),
       d.profile?.country && row("Country", d.profile.country),
     ]),
-    card("Most replayed moments", () => video, (d) => {
+    card("Most replayed moments", "video", (d) => {
       if (!d.moments.available) return h("p", { class: "muted" }, "No replay graph for this video yet.");
       return [
         spark(d.moments.heatmap),
@@ -134,13 +199,13 @@ async function main() {
         h("p", { class: "note" }, "Click a moment to jump to it."),
       ];
     }),
-    card("Engagement", () => video, (d) => [
+    card("Engagement", "video", (d) => [
       d.engagement?.like_rate != null && row("Like rate", `${d.engagement.like_rate}% (${d.engagement.verdict})`),
       d.engagement?.approval != null && row("Approval", `${d.engagement.approval}%`),
       d.forecast && row("Next 30 days", `${range(d.forecast.next_30_days, compact)} views`),
       row("Search readiness", `${d.seo.score}/100`),
-    ]),
-    card("What viewers are saying", () => get("/comments", url), (d) => {
+    ], "mixed"),
+    card("What viewers are saying", "comments", (d) => {
       if (!d.sampled) return h("p", { class: "muted" }, "No comments to read.");
       const { positive, neutral, negative } = d.mood;
       return [
@@ -156,7 +221,7 @@ async function main() {
         h("p", { class: "note" }, "Languages are a guess at the audience, from the top comments."),
       ];
     }),
-    card("What the video says", () => get("/transcript", url), (d) =>
+    card("What the video says", "transcript", (d) =>
       d.available
         ? [
             d.words_per_minute && row("Speaking pace", `${d.words_per_minute} words/min (${d.pace})`),

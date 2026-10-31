@@ -1,6 +1,7 @@
 # Viewlens (Chrome extension)
 
-Insights for the video you're watching: estimated earnings, how it compares with the channel,
+Insights for the video you're watching. It opens with **What stands out**: the 4 most important findings
+(good signs, warnings and things worth knowing), then estimated earnings, how it compares with the channel,
 the most replayed moments (click to jump), engagement, comment mood and the transcript's topics.
 It is analysis only; it has no download features, so it fits the Chrome Web Store rules.
 
@@ -21,3 +22,7 @@ Change `API_BASE` in `config.js` **and** the URL in `host_permissions` in `manif
    Permissions justification: see `PRIVACY.md`.
 
 Keep the name and description free of "YouTube" (it's a trademark) and of any mention of downloading.
+
+## Shared code
+`lib/highlights.js` and `lib/format.js` are copies of the website's `src/lib` files (the extension has no
+build step). When you change the highlight rules on the website, copy them here too.
