@@ -1097,3 +1097,15 @@ h3 {
 .question small {
   color: var(--faint);
 }
+
+.server-tag {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px dashed var(--pencil);
+  border-radius: 999px;
+  color: var(--pencil);
+  font-size: 10.5px;
+  font-weight: 650;
+  font-stretch: 100%;
+  vertical-align: 2px;
+}

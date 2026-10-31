@@ -1,4 +1,4 @@
-import { API_BASE } from "./config.js";
+import { DEPLOYED_API, LOCAL_API } from "./config.js";
 import { buildHighlights } from "./lib/highlights.js";
 
 const app = document.getElementById("app");
@@ -92,6 +92,25 @@ function videoIdFrom(url) {
     return null;
   }
 }
+
+// ─── Which server to use ───
+
+// Store installs have an update_url in their manifest; unpacked (development) copies don't.
+const isDevelopmentCopy = () => !chrome.runtime?.getManifest?.().update_url;
+
+async function pickServer() {
+  if (isDevelopmentCopy()) {
+    try {
+      const response = await fetch(`${LOCAL_API}/health`, { signal: AbortSignal.timeout(800) });
+      if (response.ok) return LOCAL_API;
+    } catch {
+      // local backend isn't running; use the deployed one
+    }
+  }
+  return DEPLOYED_API;
+}
+
+let API_BASE = DEPLOYED_API;
 
 // ─── Data: each part is fetched once and shared by every card that uses it ───
 
@@ -612,6 +631,10 @@ async function main() {
     return;
   }
   currentUrl = url;
+  API_BASE = await pickServer();
+  if (API_BASE === LOCAL_API) {
+    document.querySelector(".brand").append(h("span", { class: "server-tag", title: LOCAL_API }, "Local server"));
+  }
 
   const panels = { analytics: analyticsPanel(tab.id), details: detailsPanel(tab.id) };
   app.replaceChildren(heroCard(videoIdFrom(url)), kpiStrip(), tabBar(panels), panels.analytics, panels.details);
