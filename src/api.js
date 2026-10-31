@@ -160,3 +160,12 @@ function triggerBrowserDownload(taskId, filename) {
   a.click()
   document.body.removeChild(a)
 }
+
+// ─── Insights (estimates and analysis from public data) ───
+const insight = (path, message) => async (url) =>
+  (await request(`/api/insights${path}?url=${encodeURIComponent(url)}`, undefined, message)).data
+
+export const fetchInsights = insight('', 'Unable to analyse this video.')
+export const fetchChannelInsights = insight('/channel', 'Unable to load the channel report.')
+export const fetchCommentInsights = insight('/comments', 'Unable to read the comments.')
+export const fetchTranscriptInsights = insight('/transcript', 'Unable to read the transcript.')

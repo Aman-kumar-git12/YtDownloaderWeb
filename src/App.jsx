@@ -11,6 +11,7 @@ import SubtitleList from "./components/SubtitleList";
 import ClipPicker from "./components/ClipPicker";
 import { readClip } from "./lib/clip";
 import PencilMark from "./components/PencilMark";
+import InsightsPanel from "./components/insights/InsightsPanel";
 import {
   wakeServer,
   fetchMetadata,
@@ -22,16 +23,28 @@ import {
   downloadAudio,
   downloadThumbnail,
   downloadSubtitles,
+  fetchInsights,
+  fetchChannelInsights,
+  fetchCommentInsights,
+  fetchTranscriptInsights,
 } from "./api";
-import { findYouTubeUrl, isYouTubeUrl, normalizeUrl } from "./lib/format";
+import { findYouTubeUrl, isYouTubeUrl, normalizeUrl, toClock } from "./lib/format";
 
 const TABS = [
   { id: "video", label: "Video" },
   { id: "audio", label: "Audio" },
   { id: "subtitles", label: "Subtitles" },
   { id: "thumbnail", label: "Thumbnail" },
+  { id: "insights", label: "Insights" },
   { id: "details", label: "Details" },
 ];
+
+const INSIGHT_LOADERS = {
+  video: fetchInsights,
+  channel: fetchChannelInsights,
+  comments: fetchCommentInsights,
+  transcript: fetchTranscriptInsights,
+};
 
 const LOADERS = {
   video: fetchVideoResolutions,
@@ -61,6 +74,7 @@ function App() {
   const [link, setLink] = useState(""); // the link that was analyzed
   const [meta, setMeta] = useState(null);
   const [panels, setPanels] = useState({}); // tab -> { status, data, error }
+  const [insights, setInsights] = useState({}); // part -> { status, data, error }
   const [activeTab, setActiveTab] = useState("video");
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState("");
@@ -112,6 +126,23 @@ function App() {
     }
   };
 
+  const loadInsight = async (part, videoUrl, id) => {
+    setInsights((prev) => ({ ...prev, [part]: { status: "loading" } }));
+    try {
+      const data = await INSIGHT_LOADERS[part](videoUrl);
+      if (id !== requestId.current) return;
+      setInsights((prev) => ({ ...prev, [part]: { status: "ready", data } }));
+    } catch (err) {
+      if (id !== requestId.current) return;
+      setInsights((prev) => ({ ...prev, [part]: { status: "error", error: err.message } }));
+    }
+  };
+
+  // Insights are only fetched when the tab is opened (comments are slow to read)
+  const loadInsights = (videoUrl, id) => {
+    for (const part of Object.keys(INSIGHT_LOADERS)) loadInsight(part, videoUrl, id);
+  };
+
   const analyze = async (rawValue) => {
     const normalized = normalizeUrl(rawValue);
     if (!normalized) return;
@@ -129,6 +160,7 @@ function App() {
       setLink(normalized);
       setMeta(data);
       setPanels({});
+      setInsights({});
       setActiveTab("video");
       setDownload(null);
       setClip(NO_CLIP);
@@ -190,6 +222,7 @@ function App() {
     setMeta(null);
     setLink("");
     setPanels({});
+    setInsights({});
     setDownload(null);
     setError("");
     setAnalyzing(false);
@@ -200,7 +233,11 @@ function App() {
 
   const selectTab = (tab) => {
     setActiveTab(tab);
-    if (tab !== "details" && !panels[tab]) loadPanel(tab, link, requestId.current);
+    if (tab === "insights") {
+      if (!insights.video) loadInsights(link, requestId.current);
+    } else if (tab !== "details" && !panels[tab]) {
+      loadPanel(tab, link, requestId.current);
+    }
   };
 
   const handleTabKeys = (e) => {
@@ -240,6 +277,19 @@ function App() {
 
   const renderPanel = () => {
     if (activeTab === "details") return <DetailsPanel meta={meta} />;
+    if (activeTab === "insights") {
+      return (
+        <InsightsPanel
+          insights={insights}
+          onRetry={(part) => loadInsight(part, link, requestId.current)}
+          onClip={(start, end) => {
+            setClip({ enabled: true, start: toClock(start), end: toClock(Math.ceil(end)) });
+            selectTab("video");
+            window.scrollTo({ top: document.getElementById("tab-panel")?.offsetTop - 120 || 0, behavior: "smooth" });
+          }}
+        />
+      );
+    }
 
     const panel = panels[activeTab];
     if (!panel || panel.status === "loading") {

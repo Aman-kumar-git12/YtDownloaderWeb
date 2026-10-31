@@ -90,3 +90,24 @@ export function findYouTubeUrl(text) {
   const match = /(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\/\S+/i.exec(text || "");
   return match ? match[0] : "";
 }
+
+// 61000 -> "$61K", 15.26 -> "$15.26"
+export function formatMoney(value) {
+  if (value == null) return "Unknown";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    notation: value >= 10000 ? "compact" : "standard",
+    maximumFractionDigits: value >= 100 ? 0 : 2,
+  }).format(value);
+}
+
+export function formatMoneyRange([low, high]) {
+  return `${formatMoney(low)} – ${formatMoney(high)}`;
+}
+
+// Unix seconds -> "Mar 5, 2024"
+export function formatTimestamp(seconds) {
+  if (!seconds) return "Unknown";
+  return new Date(seconds * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
