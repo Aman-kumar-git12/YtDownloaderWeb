@@ -32,7 +32,13 @@ const clock = (s) => {
 const row = (label, value) => h("div", { class: "row" }, h("span", { class: "muted" }, label), h("span", { class: "num" }, value));
 
 async function get(path, url) {
-  const response = await fetch(`${API_BASE}${path}?url=${encodeURIComponent(url)}`);
+  let response;
+  try {
+    // The free server can take ~50 s to wake up; give up after 90 s instead of waiting forever
+    response = await fetch(`${API_BASE}${path}?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(90000) });
+  } catch (err) {
+    throw new Error(err.name === "TimeoutError" ? "The server took too long. Try again." : "Can't reach the server. Check your connection.");
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(response.status === 429 ? "Too many lookups. Wait a minute and try again." : body.detail || "Couldn't analyse this video.");
@@ -49,6 +55,14 @@ const failed = new Set();
 let onPartChange = () => {};
 let currentUrl = "";
 
+// Cards wait here until the staged loader (in main) starts their part
+const waiting = {};
+function waitFor(name) {
+  if (parts[name]) return parts[name];
+  waiting[name] ??= Promise.withResolvers();
+  return waiting[name].promise;
+}
+
 function loadPart(name, retry = false) {
   if (!parts[name] || retry) {
     const path = { video: "/api/insights", details: "/api/metadata" }[name] || `/api/insights/${name}`;
@@ -62,6 +76,8 @@ function loadPart(name, retry = false) {
       failed.add(name);
       onPartChange();
     });
+    waiting[name]?.resolve(parts[name]);
+    delete waiting[name];
   }
   return parts[name];
 }
@@ -71,7 +87,7 @@ function card(title, part, render, source = "real") {
   const head = () => h("div", { class: "card-head" }, h("h2", {}, title), h("span", { class: `source source-${source}` }, SOURCE_LABELS[source]));
   const el = h("section", { class: "card" }, head(), h("div", { class: "skeleton big" }), h("div", { class: "skeleton" }));
   const run = (retry) =>
-    loadPart(part, retry)
+    (retry ? loadPart(part, true) : waitFor(part))
       .then((data) => el.replaceChildren(head(), ...[render(data)].flat().filter((x) => x != null && x !== false && x !== "")))
       .catch((err) =>
         el.replaceChildren(
@@ -163,8 +179,14 @@ async function main() {
   currentUrl = url;
   const highlights = highlightsCard(tab.id);
   onPartChange = highlights.render;
+  // Ask in stages so the small free server isn't hit with five lookups at once:
+  // the video first (it's cached for everything else), then the rest one by one.
   const video = loadPart("video");
-  for (const p of ["channel", "comments", "transcript", "details"]) loadPart(p).catch(() => {});
+  video
+    .catch(() => {})
+    .then(async () => {
+      for (const p of ["details", "channel", "transcript", "comments"]) await loadPart(p).catch(() => {});
+    });
   highlights.render();
   const titleCard = h("section", { class: "card" }, h("div", { class: "skeleton" }));
   video.then((d) => titleCard.replaceChildren(h("h1", {}, d.title), h("p", { class: "muted small" }, `${d.channel} · ${compact(d.views)} views`))).catch(() => titleCard.remove());
