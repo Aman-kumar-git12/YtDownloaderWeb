@@ -80,6 +80,11 @@ export async function fetchAudioFormats(url) {
   return data.data
 }
 
+export async function fetchSubtitles(url) {
+  const data = await request(`/api/subtitles?url=${encodeURIComponent(url)}`, undefined, 'Unable to load subtitles.')
+  return data.data
+}
+
 export async function fetchThumbnailResolutions(url) {
   const data = await request(`/api/thumbnail/resolutions?url=${encodeURIComponent(url)}`, undefined, 'Unable to load thumbnail sizes.')
   return data.data
@@ -118,16 +123,21 @@ async function runDownload(kind, body, onProgress, fallbackMessage) {
   }
 }
 
-export function downloadVideo(url, target, onProgress) {
-  return runDownload('video', { url, target }, onProgress, 'Unable to download this video.')
+// clip is optional: { start, end } in seconds (video and audio only)
+export function downloadVideo(url, target, onProgress, clip) {
+  return runDownload('video', { url, target, ...clip }, onProgress, 'Unable to download this video.')
 }
 
-export function downloadAudio(url, target, onProgress) {
-  return runDownload('audio', { url, target }, onProgress, 'Unable to download this audio.')
+export function downloadAudio(url, target, onProgress, clip) {
+  return runDownload('audio', { url, target, ...clip }, onProgress, 'Unable to download this audio.')
 }
 
 export function downloadThumbnail(url, target, onProgress) {
   return runDownload('thumbnail', { url, target }, onProgress, 'Unable to download this thumbnail.')
+}
+
+export function downloadSubtitles(url, target, onProgress) {
+  return runDownload('subtitles', { url, target }, onProgress, 'Unable to download these subtitles.')
 }
 
 function postBody(body) {

@@ -7,6 +7,9 @@ import VideoSummary from "./components/VideoSummary";
 import FormatList from "./components/FormatList";
 import ThumbnailGrid from "./components/ThumbnailGrid";
 import DetailsPanel from "./components/DetailsPanel";
+import SubtitleList from "./components/SubtitleList";
+import ClipPicker from "./components/ClipPicker";
+import { readClip } from "./lib/clip";
 import PencilMark from "./components/PencilMark";
 import {
   wakeServer,
@@ -14,15 +17,18 @@ import {
   fetchVideoResolutions,
   fetchAudioFormats,
   fetchThumbnailResolutions,
+  fetchSubtitles,
   downloadVideo,
   downloadAudio,
   downloadThumbnail,
+  downloadSubtitles,
 } from "./api";
-import { isYouTubeUrl, normalizeUrl } from "./lib/format";
+import { findYouTubeUrl, isYouTubeUrl, normalizeUrl } from "./lib/format";
 
 const TABS = [
   { id: "video", label: "Video" },
   { id: "audio", label: "Audio" },
+  { id: "subtitles", label: "Subtitles" },
   { id: "thumbnail", label: "Thumbnail" },
   { id: "details", label: "Details" },
 ];
@@ -30,6 +36,7 @@ const TABS = [
 const LOADERS = {
   video: fetchVideoResolutions,
   audio: fetchAudioFormats,
+  subtitles: fetchSubtitles,
   thumbnail: fetchThumbnailResolutions,
 };
 
@@ -37,9 +44,17 @@ const DOWNLOADERS = {
   video: downloadVideo,
   audio: downloadAudio,
   thumbnail: downloadThumbnail,
+  subtitles: downloadSubtitles,
 };
 
-const initialUrl = new URLSearchParams(window.location.search).get("url") || "";
+const CLIPPABLE = ["video", "audio"];
+const NO_CLIP = { enabled: false, start: "", end: "" };
+
+// ?url=… from a shared link, or ?text=/?title= when shared from the YouTube
+// app through the phone's share sheet (the installed app's share target)
+const params = new URLSearchParams(window.location.search);
+const initialUrl =
+  params.get("url") || findYouTubeUrl(`${params.get("text") || ""} ${params.get("title") || ""}`);
 
 function App() {
   const [url, setUrl] = useState(initialUrl);
@@ -51,6 +66,8 @@ function App() {
   const [error, setError] = useState("");
   const [serverWaking, setServerWaking] = useState(false);
   const [download, setDownload] = useState(null);
+  const [clip, setClip] = useState(NO_CLIP);
+  const [subtitleFormat, setSubtitleFormat] = useState("srt");
   // Bumped on every new analysis so late responses for an old link are ignored
   const requestId = useRef(0);
   const autoStarted = useRef(false);
@@ -114,11 +131,12 @@ function App() {
       setPanels({});
       setActiveTab("video");
       setDownload(null);
+      setClip(NO_CLIP);
       window.history.replaceState(null, "", `?url=${encodeURIComponent(normalized)}`);
 
       // Load the other tabs one after another in the background (the server
       // caches the video info, so these are quick) so switching tabs is instant.
-      for (const tab of ["video", "audio", "thumbnail"]) {
+      for (const tab of ["video", "audio", "subtitles", "thumbnail"]) {
         if (id !== requestId.current) return;
         await loadPanel(tab, normalized, id);
       }
@@ -196,14 +214,22 @@ function App() {
   };
 
   const handleDownload = async (tab, key) => {
+    const { clip: range, error: clipError } = CLIPPABLE.includes(tab)
+      ? readClip(clip, meta.duration_seconds)
+      : { clip: null, error: "" };
+    if (clipError) return; // the clip picker is already showing what's wrong
+
     const id = Date.now();
     // Only touch state that still belongs to this download
     const patch = (fields) => setDownload((prev) => (prev?.id === id ? { ...prev, ...fields } : prev));
 
     setDownload({ id, tab, key, status: "downloading", backendStatus: "queued", stage: null, elapsed: 0, percent: 0, speed: "" });
     try {
-      await DOWNLOADERS[tab](link, key, (job) =>
-        patch({ percent: job.percent ?? 0, speed: job.speed || "", stage: job.stage, backendStatus: job.status })
+      await DOWNLOADERS[tab](
+        link,
+        key,
+        (job) => patch({ percent: job.percent ?? 0, speed: job.speed || "", stage: job.stage, backendStatus: job.status }),
+        range || undefined
       );
       patch({ status: "completed", percent: 100 });
       setTimeout(() => setDownload((prev) => (prev?.id === id ? null : prev)), 6000);
@@ -244,7 +270,18 @@ function App() {
       busy: isDownloadRunning,
       onDownload: (key) => handleDownload(activeTab, key),
     };
-    return activeTab === "thumbnail" ? <ThumbnailGrid {...props} /> : <FormatList kind={activeTab} {...props} />;
+    if (activeTab === "thumbnail") return <ThumbnailGrid {...props} />;
+    if (activeTab === "subtitles") {
+      return <SubtitleList {...props} format={subtitleFormat} setFormat={setSubtitleFormat} />;
+    }
+    const { clip: range } = readClip(clip, meta.duration_seconds);
+    const scale = range && meta.duration_seconds ? (range.end - range.start) / meta.duration_seconds : 1;
+    return (
+      <>
+        <ClipPicker clip={clip} setClip={setClip} duration={meta.duration_seconds} />
+        <FormatList kind={activeTab} {...props} scale={scale} />
+      </>
+    );
   };
 
   return (

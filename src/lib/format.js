@@ -68,3 +68,25 @@ export function isYouTubeUrl(value) {
     return false;
   }
 }
+
+// "1:20", "01:02:03" or "80" -> seconds (null if invalid)
+export function parseTime(value) {
+  const parts = value.trim().split(":");
+  if (!value.trim() || parts.length > 3 || parts.some((p) => !/^\d+(\.\d+)?$/.test(p))) return null;
+  return parts.reduce((total, part) => total * 60 + parseFloat(part), 0);
+}
+
+// 80 -> "1:20", 3725 -> "1:02:05"
+export function toClock(seconds) {
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+// Pull the first YouTube link out of shared text ("Check this out https://youtu.be/…")
+export function findYouTubeUrl(text) {
+  const match = /(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\/\S+/i.exec(text || "");
+  return match ? match[0] : "";
+}

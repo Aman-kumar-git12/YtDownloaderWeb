@@ -2,8 +2,9 @@ import { Clipboard, Link2, LoaderCircle } from "lucide-react";
 import PencilMark from "./PencilMark";
 
 const FRAMES = [
-  { title: "Video", detail: "MP4 from 144p up to 4K" },
-  { title: "Audio", detail: "MP3, M4A, WAV, FLAC or AAC" },
+  { title: "Video", detail: "MP4 up to 4K, whole or a clip" },
+  { title: "Audio", detail: "MP3 or M4A with cover art, WAV, FLAC, AAC" },
+  { title: "Subtitles", detail: "SRT or VTT in every language" },
   { title: "Thumbnail", detail: "JPG or WebP, up to 1920×1080" },
   { title: "Details", detail: "Views, likes, tags and chapters" },
 ];

@@ -994,3 +994,148 @@ a.summary-channel:hover {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Clip picker */
+
+.clip {
+  margin-bottom: 16px;
+}
+
+.clip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px dashed var(--ink-muted);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.clip-toggle:hover,
+.clip.is-on .clip-toggle {
+  border-style: solid;
+  border-color: var(--pencil);
+  color: var(--pencil);
+}
+
+.clip-body {
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.clip-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.clip-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.clip-fields input {
+  width: 120px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--sheet);
+  color: var(--ink);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-fields input:focus {
+  outline: 0;
+  border-color: var(--ink);
+}
+
+.clip-fields input[aria-invalid="true"] {
+  border-color: var(--pencil);
+}
+
+/* The whole video as a strip of film, with the chosen part marked */
+.clip-strip {
+  position: relative;
+  height: 18px;
+  margin-top: 14px;
+  border-radius: 3px;
+  background:
+    radial-gradient(circle, var(--film-hole) 1.6px, transparent 2px) 0 2px / 10px 10px repeat-x,
+    radial-gradient(circle, var(--film-hole) 1.6px, transparent 2px) 0 calc(100% - 2px) / 10px 10px repeat-x,
+    var(--film);
+}
+
+.clip-range {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  min-width: 4px;
+  border: 2.5px solid var(--pencil);
+  border-radius: 4px;
+  transition: left 0.2s var(--ease), width 0.2s var(--ease);
+}
+
+.clip-note {
+  margin-top: 10px;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.clip-note.is-error {
+  color: var(--pencil);
+  font-weight: 500;
+}
+
+/* Subtitle format switch */
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 4px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.segmented button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-height: 44px;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.segmented button strong {
+  font-size: 0.9375rem;
+  color: var(--ink);
+}
+
+.segmented button span {
+  font-size: 0.8125rem;
+}
+
+.segmented button.is-selected {
+  border-color: var(--ink);
+  background: var(--table);
+}

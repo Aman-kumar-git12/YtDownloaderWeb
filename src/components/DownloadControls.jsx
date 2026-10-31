@@ -7,6 +7,7 @@ const PROCESSING_LABEL = {
   video: "Merging video and audio…",
   audio: "Converting audio…",
   thumbnail: "Saving image…",
+  subtitles: "Converting subtitles…",
 };
 
 function statusText(kind, download) {
