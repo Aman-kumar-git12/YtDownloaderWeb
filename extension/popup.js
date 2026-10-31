@@ -232,8 +232,13 @@ function kpiStrip() {
   const cells = [cell("earned, estimated"), cell("vs channel’s usual"), cell("like rate")];
   const el = h("section", { class: "kpis", "aria-label": "Key numbers" }, cells.map((c) => c.el));
 
-  const fill = (c, text, title) => {
-    c.el.replaceChildren(h("strong", { title: title || text }, text), h("span", {}, c.label));
+  // tone adds a small coloured dot plus a word, so the verdict isn't colour-only
+  const fill = (c, text, title, tone, word) => {
+    c.el.className = `kpi${tone ? ` kpi-${tone}` : ""}`;
+    c.el.replaceChildren(
+      h("strong", { title: title || text }, text),
+      h("span", {}, word && h("i", { class: "dot", "aria-hidden": "true" }), word ? `${word} · ${c.label}` : c.label)
+    );
   };
   const render = () => {
     const v = partData.video;
@@ -241,12 +246,18 @@ function kpiStrip() {
     if (v) {
       const [low, high] = v.earnings.total;
       fill(cells[0], `${money(low)}–${money(high).replace(/^\$/, "")}`, range(v.earnings.total));
-      fill(cells[2], v.engagement?.like_rate != null ? `${v.engagement.like_rate}%` : "Hidden");
+      const verdict = v.engagement?.verdict;
+      const likeTone = verdict === "low" ? "warn" : verdict === "strong" || verdict === "exceptional" ? "good" : null;
+      fill(cells[2], v.engagement?.like_rate != null ? `${v.engagement.like_rate}%` : "Hidden", null, likeTone, likeTone && verdict);
     } else if (failed.has("video")) {
       fill(cells[0], "—");
       fill(cells[2], "—");
     }
-    if (ch?.this_video?.outlier_score != null) fill(cells[1], timesFmt(ch.this_video.outlier_score));
+    const score = ch?.this_video?.outlier_score;
+    if (score != null) {
+      const tone = score >= 1.5 ? "good" : score < 0.67 ? "warn" : null;
+      fill(cells[1], timesFmt(score), null, tone, score >= 3 ? "breakout" : score >= 1.5 ? "above" : score < 0.67 ? "below" : null);
+    }
     else if (ch || failed.has("channel")) fill(cells[1], "—");
   };
   listeners.add(render);
@@ -305,9 +316,78 @@ function replayChart(heatmap, duration, moments) {
     const ring = svg({ viewBox: "0 0 40 40" }, { d: "M8 21c-1-8 7-14 15-12s11 9 8 15-11 8-17 5c-4-2-6-5-6-9", style: `animation-delay:${0.15 + i * 0.2}s` });
     return h("span", { class: "peak", style: { left: `${(m.peak / duration) * 100}%`, top: `${(y(heatmap[idx]) / H) * 100}%` } }, ring, h("b", {}, i + 1));
   });
+  const cursor = h("span", { class: "replay-cursor", hidden: "" });
+  const tip = h("span", { class: "replay-tip num", hidden: "" });
+  const box = h("div", { class: "replay", role: "img", "aria-label": `Replay graph; most replayed at ${moments.map((m) => clock(m.peak)).join(", ")}` }, chart, peaks, cursor, tip);
+  box.addEventListener("pointermove", (e) => {
+    const r = box.getBoundingClientRect();
+    const ratio = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
+    const i = Math.round(ratio * (n - 1));
+    cursor.hidden = tip.hidden = false;
+    cursor.style.left = tip.style.left = `${ratio * 100}%`;
+    tip.classList.toggle("is-left", ratio > 0.6);
+    tip.textContent = `${clock(ratio * duration)} · ${(heatmap[i] / mean).toFixed(1)}× replays`;
+  });
+  box.addEventListener("pointerleave", () => (cursor.hidden = tip.hidden = true));
   return [
-    h("div", { class: "replay", role: "img", "aria-label": `Replay graph; most replayed at ${moments.map((m) => clock(m.peak)).join(", ")}` }, chart, peaks),
+    box,
     h("div", { class: "axis num" }, h("span", {}, "0:00"), h("span", {}, clock(duration / 2)), h("span", {}, clock(duration))),
+  ];
+}
+
+// One dot per recent upload, placed by views (log scale); this video circled in pencil
+function dotPlot(list, thisVideo, median, thisId) {
+  const W = 360, H = 46, PAD = 8;
+  const values = list.map((v) => v.views).concat(thisVideo.views ?? []).filter((v) => v > 0);
+  const lo = Math.log10(Math.min(...values)), hi = Math.log10(Math.max(...values));
+  const x = (v) => PAD + ((Math.log10(Math.max(v, 1)) - lo) / (hi - lo || 1)) * (W - PAD * 2);
+  const dots = list.filter((v) => v.id !== thisId && v.views > 0).map((v, i) => ({
+    d: `M${x(v.views)} ${H / 2 + ((i % 3) - 1) * 7}h.01`, class: "dp-dot",
+  }));
+  const marks = [{ d: `M${x(median)} 4V${H - 4}`, class: "dp-median" }, ...dots];
+  const tx = thisVideo.views ? x(thisVideo.views) : null;
+  if (tx != null) {
+    marks.push({ d: `M${tx} ${H / 2}h.01`, class: "dp-this" });
+    marks.push({ d: `M${tx - 9} ${H / 2 + 1}c0-6 5-10 10-9s9 5 8 10-6 8-11 7c-4-1-7-4-7-8`, class: "dp-ring" });
+  }
+  return [
+    h("div", { class: "dotplot", role: "img", "aria-label": `This video has ${compact(thisVideo.views)} views; the channel's recent uploads range from ${compact(10 ** lo)} to ${compact(10 ** hi)}, median ${compact(median)}.` },
+      svg({ viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" }, ...marks)),
+    h("div", { class: "dp-legend small" },
+      h("span", {}, h("i", { class: "dp-key-dot" }), "recent uploads"),
+      h("span", {}, h("i", { class: "dp-key-line" }), "usual"),
+      h("span", {}, h("i", { class: "dp-key-ring" }), "this video")),
+  ];
+}
+
+// Like rate on a scale with the normal range shaded
+function likeGauge(rate, verdict) {
+  const max = Math.max(6, rate * 1.15);
+  const pct = (v) => `${Math.min((v / max) * 100, 100)}%`;
+  return h("div", { class: "gauge" },
+    h("div", { class: "gauge-top" }, h("span", { class: "muted" }, "Like rate"), h("strong", { class: "num" }, `${rate}% · ${verdict}`)),
+    h("div", { class: "gauge-track", role: "img", "aria-label": `Like rate ${rate}%; most videos get 1.5% to 3.5%` },
+      h("span", { class: "gauge-band", style: { left: pct(1.5), width: `calc(${pct(3.5)} - ${pct(1.5)})` } }),
+      h("span", { class: `gauge-marker gauge-${verdict}`, style: { left: pct(rate) } })),
+    h("div", { class: "gauge-scale small num" }, h("span", {}, "0%"), h("span", { style: { left: pct(2.5) } }, "typical"), h("span", {}, `${Math.round(max)}%`)));
+}
+
+// Score ring plus the most useful fixes
+function seoScore(seo) {
+  const C = 2 * Math.PI * 22;
+  const tone = seo.score >= 80 ? "good" : seo.score < 55 ? "warn" : "mid";
+  const failed = seo.checks.filter((c) => !c.passed);
+  return [
+    h("div", { class: "seo" },
+      h("div", { class: `ring-score ring-${tone}` },
+        svg({ viewBox: "0 0 56 56", "aria-hidden": "true" },
+          { d: "M28 6a22 22 0 1 1 0 44 22 22 0 0 1 0-44", class: "ring-bg" },
+          { d: "M28 6a22 22 0 1 1 0 44 22 22 0 0 1 0-44", class: "ring-fg", style: `stroke-dasharray:${C};stroke-dashoffset:${C * (1 - seo.score / 100)}` }),
+        h("strong", { class: "num" }, seo.score)),
+      h("div", {},
+        h("strong", {}, seo.score >= 80 ? "Well set up for search" : seo.score >= 55 ? "Decent, with room to improve" : "Hard to find in search"),
+        h("p", { class: "muted small" }, `${seo.checks.length - failed.length} of ${seo.checks.length} checks passed`))),
+    failed.slice(0, 3).map((c) => h("div", { class: "fix" }, icon("alert"), h("span", {}, h("strong", {}, c.label), h("span", { class: "muted" }, ` · ${c.detail}`)))),
   ];
 }
 
@@ -340,6 +420,7 @@ function analyticsPanel(tabId) {
     card("Compared with the channel", "channel", (d) => [
       d.this_video.outlier_score != null && h("p", { class: "big" }, timesFmt(d.this_video.outlier_score)),
       h("p", { class: "big-sub" }, `vs a median of ${compact(d.recent.median_views)} views on the last ${d.recent.count} uploads`),
+      d.recent.views?.length > 2 && dotPlot(d.recent.views, d.this_video, d.recent.median_views, partData.video?.video_id),
       row("Subscribers", compact(d.subscribers)),
       d.upload_rhythm && row("Uploads", `${d.upload_rhythm.per_week} a week`),
       d.recent.views_per_subscriber != null && row("Typical reach", `${(d.recent.views_per_subscriber * 100).toFixed(1)}% of subs`),
@@ -348,11 +429,12 @@ function analyticsPanel(tabId) {
     ]),
 
     card("Engagement", "video", (d) => [
-      d.engagement?.like_rate != null && row("Like rate", `${d.engagement.like_rate}% · ${d.engagement.verdict}`),
+      d.engagement?.like_rate != null && likeGauge(d.engagement.like_rate, d.engagement.verdict),
       d.engagement?.approval != null && row("Approval", `${d.engagement.approval}%`),
       d.forecast && row("Next 30 days", `${range(d.forecast.next_30_days, compact)} views`),
-      row("Search readiness", `${d.seo.score}/100`),
     ], "mixed"),
+
+    card("Search readiness", "video", (d) => seoScore(d.seo)),
 
     card("What viewers are saying", "comments", (d) => {
       if (!d.sampled) return h("p", { class: "muted" }, "No comments to read.");
@@ -367,6 +449,10 @@ function analyticsPanel(tabId) {
           h("span", {}, h("i", { class: "neu" }), `${neutral}% neutral`),
           h("span", {}, h("i", { class: "neg" }), `${negative}% negative`)),
         d.top_comment && h("blockquote", { class: "quote" }, d.top_comment.text, h("small", { class: "num" }, `${compact(d.top_comment.likes)} likes`)),
+        d.questions?.length > 0 && [
+          h("h3", {}, "Viewers are asking"),
+          d.questions.slice(0, 2).map((q) => h("p", { class: "question" }, q.text, h("small", { class: "num" }, ` ${compact(q.likes)} likes`))),
+        ],
         d.languages.slice(0, 3).map((l) => row(l.name, `${l.share}%`)),
         h("p", { class: "note" }, "Languages hint at where viewers are; exact countries are private."),
       ];

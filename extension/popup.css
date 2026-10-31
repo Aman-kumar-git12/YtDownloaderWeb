@@ -825,3 +825,275 @@ main {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ─── Verdict dots in the key-number strip ─── */
+.kpi .dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--faint);
+}
+
+.kpi-good .dot {
+  background: var(--good);
+}
+
+.kpi-warn .dot {
+  background: var(--pencil);
+}
+
+.kpi-good span,
+.kpi-warn span {
+  color: var(--ink);
+}
+
+h3 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+/* ─── This video vs recent uploads ─── */
+.dotplot svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.dp-dot {
+  stroke: color-mix(in srgb, var(--ink) 45%, var(--sheet));
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+
+.dp-median {
+  stroke: var(--faint);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+
+.dp-this {
+  stroke: var(--ink);
+  stroke-width: 9;
+  stroke-linecap: round;
+}
+
+.dp-ring {
+  fill: none;
+  stroke: var(--pencil);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-dasharray: 80;
+  stroke-dashoffset: 80;
+  animation: draw 0.6s var(--ease) 0.2s forwards;
+}
+
+.dp-legend {
+  display: flex;
+  gap: 14px;
+  margin: 2px 0 8px;
+  color: var(--muted);
+}
+
+.dp-legend i {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: 1px;
+}
+
+.dp-key-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ink) 45%, var(--sheet));
+}
+
+.dp-key-line {
+  width: 0;
+  height: 10px;
+  border-left: 1.5px dashed var(--faint);
+  vertical-align: -1px !important;
+}
+
+.dp-key-ring {
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--pencil);
+  border-radius: 50%;
+}
+
+/* ─── Like-rate gauge ─── */
+.gauge {
+  padding-bottom: 8px;
+}
+
+.gauge-top {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.gauge-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--sheet-2);
+}
+
+.gauge-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--good) 28%, transparent);
+}
+
+.gauge-marker {
+  position: absolute;
+  top: -4px;
+  width: 4px;
+  height: 16px;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: var(--ink);
+  box-shadow: 0 0 0 2px var(--sheet);
+}
+
+.gauge-low {
+  background: var(--pencil);
+}
+
+.gauge-strong,
+.gauge-exceptional {
+  background: var(--good);
+}
+
+.gauge-scale {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  height: 16px;
+  margin-top: 4px;
+  color: var(--faint);
+}
+
+.gauge-scale span:nth-child(2) {
+  position: absolute;
+  transform: translateX(-50%);
+  color: var(--good);
+}
+
+/* ─── Search readiness ─── */
+.seo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.ring-score {
+  position: relative;
+  flex: none;
+  width: 56px;
+  height: 56px;
+}
+
+.ring-score svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+.ring-bg {
+  stroke: var(--sheet-2);
+}
+
+.ring-fg {
+  stroke: var(--muted);
+  transition: stroke-dashoffset 0.8s var(--ease);
+}
+
+.ring-good .ring-fg {
+  stroke: var(--good);
+}
+
+.ring-warn .ring-fg {
+  stroke: var(--pencil);
+}
+
+.ring-score strong {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.fix {
+  display: flex;
+  gap: 8px;
+  padding-block: 6px;
+  border-top: 1px solid var(--rule);
+  font-size: 12.5px;
+}
+
+.fix svg.icon {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--pencil);
+}
+
+/* ─── Replay hover ─── */
+.replay {
+  cursor: crosshair;
+}
+
+.replay-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--muted);
+  pointer-events: none;
+}
+
+.replay-tip {
+  position: absolute;
+  top: -8px;
+  margin-left: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--sheet);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.replay-tip.is-left {
+  transform: translateX(calc(-100% - 16px));
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ─── Questions ─── */
+.question {
+  padding: 5px 0;
+  border-top: 1px solid var(--rule);
+  font-size: 12.5px;
+}
+
+.question small {
+  color: var(--faint);
+}
