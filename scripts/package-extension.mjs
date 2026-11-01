@@ -1,5 +1,5 @@
-// Builds the Chrome Web Store zip: copies extension/ without docs and removes the
-// localhost permission (only needed while developing) from the manifest.
+// Builds the extension zip: copies extension/ without docs (and drops any localhost
+// permission, in case one is added while developing).
 // Usage: npm run package:extension  ->  viewlens-<version>.zip in the Frontend folder
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";

@@ -1,5 +1,8 @@
-import { DEPLOYED_API, LOCAL_API, WEBSITE } from "./config.js";
+import { DEPLOYED_API, WEBSITE } from "./config.js";
 import { buildHighlights } from "./lib/highlights.js";
+import { readLocal } from "./lib/local.js";
+import { buildPredictions } from "./lib/predict.js";
+import { analyseTranscript, pageTranscript, readChannel, readComments } from "./lib/local-more.js";
 
 const app = document.getElementById("app");
 const VIDEO_URL = /^https:\/\/(www\.|m\.)?youtube\.com\/(watch\?|shorts\/)|^https:\/\/youtu\.be\//;
@@ -53,6 +56,19 @@ const ICONS = {
   eye: ["M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z", "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"],
   skip: ["M5 4l10 8-10 8V4Z", "M19 5v14"],
   image: ["M3 5h18v14H3z", "m3 16 5-5 4 4 3-3 6 6", "M15.5 8.5h.01"],
+  dollar: ["M12 2v20", "M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"],
+  calendar: ["M3 5h18v16H3z", "M3 10h18", "M8 3v4", "M16 3v4"],
+  layers: ["m12 3 9 5-9 5-9-5 9-5Z", "m3 13 9 5 9-5"],
+  film: ["M3 4h18v16H3z", "M7 4v16", "M17 4v16", "M3 9h4", "M3 15h4", "M17 9h4", "M17 15h4"],
+  music: ["M9 18V5l12-2v13", "M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z", "M18 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"],
+  file: ["M14 3H6v18h12V7l-4-4Z", "M14 3v4h4"],
+  heart: ["M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"],
+  user: ["M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z", "M4 21a8 8 0 0 1 16 0"],
+  chat: ["M21 12a8 8 0 0 1-11.8 7L3 21l2-6.2A8 8 0 1 1 21 12Z"],
+  pin: ["M12 17v5", "M9 3h6l-1 6 4 4H6l4-4-1-6Z"],
+  tag: ["M20 12 12 20l-9-9V3h8l9 9Z", "M7.5 7.5h.01"],
+  spark: ["M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z", "M19 15l.7 1.8 1.8.7-1.8.7L19 20l-.7-1.8-1.8-.7 1.8-.7L19 15Z"],
+  flag: ["M5 21V4", "M5 4h11l-2 4 2 4H5"],
 };
 const icon = (name, label) =>
   svg({ class: "icon", viewBox: "0 0 24 24", ...(label ? { role: "img", "aria-label": label } : { "aria-hidden": "true" }) }, ...ICONS[name]);
@@ -99,24 +115,9 @@ function videoIdFrom(url) {
   }
 }
 
-// ─── Which server to use ───
+// ─── Server ───
 
-// Store installs have an update_url in their manifest; unpacked (development) copies don't.
-const isDevelopmentCopy = () => !chrome.runtime?.getManifest?.().update_url;
-
-async function pickServer() {
-  if (isDevelopmentCopy()) {
-    try {
-      const response = await fetch(`${LOCAL_API}/health`, { signal: AbortSignal.timeout(800) });
-      if (response.ok) return LOCAL_API;
-    } catch {
-      // local backend isn't running; use the deployed one
-    }
-  }
-  return DEPLOYED_API;
-}
-
-let API_BASE = DEPLOYED_API;
+const API_BASE = DEPLOYED_API;
 
 // "awake" if /health answers within 3 s, otherwise "asleep" (the free server is starting up).
 // serverAwake flips to true once /health finally answers, so the popup can say the server is up.
@@ -690,7 +691,7 @@ function facts(items) {
     items.filter(Boolean).map(([label, value, tone, hint]) =>
       h("div", { class: `fact${tone ? ` fact-${tone}` : ""}${String(value).length > 16 ? " fact-wide" : ""}`, title: hint || null },
         h("span", { class: "fact-label" }, label),
-        h("strong", { class: "fact-value" }, tone && h("i", { class: "dot", "aria-hidden": "true" }), value))));
+        h("strong", { class: "fact-value" }, (tone === "good" || tone === "warn") && h("i", { class: "dot", "aria-hidden": "true" }), value, tone === "est" && h("span", { class: "est" }, "est.")))));
 }
 
 // Loudness on a −12…+12 dB scale; YouTube's target is the 0 line
@@ -700,7 +701,7 @@ function loudness(db) {
     : db < -1 ? `Quieter than YouTube’s level by ${Math.abs(db).toFixed(1)} dB (not boosted)`
       : "Right at YouTube’s normal loudness";
   return h("div", { class: "loud" },
-    h("div", { class: "loud-top" }, icon("volume"), h("span", {}, verdict)),
+    h("div", { class: "loud-top" }, h("span", {}, verdict)),
     h("div", { class: "loud-track", role: "img", "aria-label": verdict },
       h("span", { class: "loud-zero" }),
       h("span", { class: `loud-fill ${db >= 0 ? "is-up" : "is-down"}`, style: db >= 0 ? { left: "50%", width: `${(clamped / 24) * 100}%` } : { right: "50%", width: `${(-clamped / 24) * 100}%` } })),
@@ -718,54 +719,92 @@ function exactTime(iso) {
 
 const openTab = (url) => chrome.tabs.create({ url });
 
+// A labelled group inside a card: coloured icon, title, one-line "what is this", then the content
+function group(iconName, title, about, ...content) {
+  const body = content.flat(Infinity).filter(Boolean);
+  if (!body.length) return null;
+  return h("div", { class: "group" },
+    h("div", { class: "group-head" },
+      h("span", { class: `group-icon gi-${iconName}` }, icon(iconName)),
+      h("div", {}, h("strong", {}, title), h("span", { class: "group-about" }, about))),
+    body);
+}
+
+// Where a card's data comes from, in plain words, right under its title
+const origin = (text) => h("p", { class: "origin" }, text);
+
 function hiddenPanel(tabId, videoId) {
   return h("div", { class: "panel", id: "panel-hidden", role: "tabpanel", "aria-labelledby": "tab-hidden", hidden: "" },
     h("p", { class: "panel-intro" }, icon("eye"), "Things YouTube knows about this video but doesn’t show you."),
+    h("div", { class: "legend-keys small" },
+      h("span", {}, h("i", { class: "src src-real" }), "Real data"),
+      h("span", {}, h("i", { class: "src src-est" }), "Estimate"),
+      h("span", {}, h("i", { class: "dot dot-good" }), "Good"),
+      h("span", {}, h("i", { class: "dot dot-warn" }), "Worth a look")),
 
     card("Behind the player", "page", (d) => [
-      d.loudnessDb != null && loudness(d.loudnessDb),
-      facts([
-        ["Ad breaks", d.ads.length ? `${d.ads.length} planned` : d.playerAds ? "Yes" : "None sent", null,
-          "Ad slots YouTube sent with this video. An ad blocker can hide them."],
-        ["Paid promotion", d.paidPromotion ? "Declared" : "Not declared", d.paidPromotion ? "warn" : null],
-        ["Uploaded at", exactTime(d.publishDate)],
-        ["Family-safe", yesNo(d.familySafe), d.familySafe === false ? "warn" : null],
-        ["Unlisted", yesNo(d.unlisted), d.unlisted ? "warn" : null],
-        ["Likes shown", yesNo(d.allowRatings, "Yes", "Hidden by creator"), d.allowRatings === false ? "warn" : null],
-        ["In search", yesNo(d.crawlable), d.crawlable === false ? "warn" : null],
-        ["Embeds", yesNo(d.embeddable, "Allowed", "Blocked")],
-        d.countries != null && ["Countries", `${d.countries} allowed`],
-        ["Hidden tags", String(d.keywords)],
-        ["End screen", d.endscreen ? `${d.endscreen} items` : "None"],
-        ["Info cards", d.cards ? String(d.cards) : "None"],
-        ["Captions", d.creatorCaptions ? `${d.creatorCaptions} by creator` : d.autoCaptions ? "Auto only" : "None"],
-        d.translatable > 0 && ["Auto-translate", `${d.translatable} languages`],
-      ]),
-      d.ads.length > 0 && h("div", { class: "ad-marks" },
-        h("span", { class: "muted small" }, "Ads at"),
-        d.ads.map((t) => t === -1 ? h("span", { class: "chip-time" }, "end")
-          : t === 0 ? h("span", { class: "chip-time" }, "start")
-            : h("button", { class: "chip-time", onclick: () => seek(tabId, t), title: "Jump here" }, clock(t)))),
+      origin("Read from YouTube’s own player on this page."),
+      d.loudnessDb != null && group("volume", "Sound", "How loud it was mixed, and what YouTube does about it", loudness(d.loudnessDb)),
+      group("dollar", "Ads & money", "Ads YouTube planned and sponsorship disclosure",
+        facts([
+          ["Ad breaks", d.ads.length ? `${d.ads.length} planned` : d.playerAds ? "Yes" : "None sent", null, "An ad blocker can hide these."],
+          ["Paid promotion", d.paidPromotion ? "Declared" : "Not declared", d.paidPromotion ? "warn" : null],
+        ]),
+        d.ads.length > 0 && h("div", { class: "ad-marks" },
+          h("span", { class: "muted small" }, "Ads at"),
+          d.ads.map((t) => t === -1 ? h("span", { class: "chip-time" }, "end")
+            : t === 0 ? h("span", { class: "chip-time" }, "start")
+              : h("button", { class: "chip-time", onclick: () => seek(tabId, t), title: "Jump here" }, clock(t))))),
+      group("eye", "Visibility", "Who can find, see and share this video",
+        facts([
+          ["Unlisted", yesNo(d.unlisted), d.unlisted ? "warn" : null],
+          ["In search", yesNo(d.crawlable), d.crawlable === false ? "warn" : null],
+          ["Embeds", yesNo(d.embeddable, "Allowed", "Blocked"), d.embeddable === false ? "warn" : null],
+          ["Family-safe", yesNo(d.familySafe), d.familySafe === false ? "warn" : null],
+          ["Likes shown", yesNo(d.allowRatings, "Yes", "Hidden"), d.allowRatings === false ? "warn" : null],
+          d.countries != null && ["Countries", `${d.countries} allowed`],
+        ])),
+      group("calendar", "Upload", "The exact moment it went live (your time zone)",
+        facts([["Uploaded at", exactTime(d.publishDate)]])),
+      group("layers", "Extras", "What the creator added around the video",
+        facts([
+          ["Hidden tags", String(d.keywords)],
+          ["End screen", d.endscreen ? `${d.endscreen} items` : "None"],
+          ["Info cards", d.cards ? String(d.cards) : "None"],
+          ["Captions", d.creatorCaptions ? `${d.creatorCaptions} by creator` : d.autoCaptions ? "Auto only" : "None"],
+          d.translatable > 0 && ["Auto-translate", `${d.translatable} languages`],
+        ])),
     ]),
 
     card("Streams & quality", "page", (d) => {
       const s = d.streams;
-      if (!s) return h("p", { class: "muted" }, "YouTube didn’t share the stream list with this page.");
+      if (!s) return [origin("The files YouTube serves for this video."), h("p", { class: "muted" }, "YouTube didn’t share the stream list with this page.")];
       const total = (s.bestVideo?.size || 0) + (s.bestAudio?.size || 0);
       return [
-        facts([
-          s.bestVideo && ["Best video", `${s.bestVideo.label} · ${s.bestVideo.codec}`],
-          s.bestVideo?.mbps > 0 && ["Video bitrate", `${s.bestVideo.mbps.toFixed(1)} Mbps`],
-          s.bestAudio && ["Best audio", `${s.bestAudio.codec} · ${s.bestAudio.kbps} kbps`],
-          s.bestAudio?.khz && ["Sample rate", `${s.bestAudio.khz} kHz${s.bestAudio.channels > 2 ? ` · ${s.bestAudio.channels} ch` : s.bestAudio.channels === 2 ? " · stereo" : ""}`],
-          ["HDR", yesNo(s.hdr), s.hdr ? "good" : null],
-          ["360° / VR", yesNo(s.vr), s.vr ? "good" : null],
-          total > 0 && ["Full-quality size", `≈ ${bytes(total)}`],
-          ["Streams", `${s.count} files`],
-        ]),
-        h("h3", {}, "Video codecs"),
-        h("ul", { class: "chips" }, s.codecs.map((c) => h("li", {}, c))),
-        s.audioTracks.length > 1 && [h("h3", {}, `Audio in ${s.audioTracks.length} languages`), h("ul", { class: "chips" }, s.audioTracks.map((t) => h("li", {}, t)))],
+        origin("The files YouTube serves for this video."),
+        group("film", "Video", "Best picture quality available",
+          facts([
+            s.bestVideo && ["Resolution", s.bestVideo.label],
+            s.bestVideo && ["Codec", s.bestVideo.codec],
+            s.bestVideo?.mbps > 0 && ["Bitrate", `${s.bestVideo.mbps.toFixed(1)} Mbps`],
+            ["HDR", yesNo(s.hdr), s.hdr ? "good" : null],
+            s.vr && ["360° / VR", "Yes", "good"],
+          ])),
+        group("music", "Audio", "Best sound quality available",
+          facts([
+            s.bestAudio && ["Codec", s.bestAudio.codec],
+            s.bestAudio && ["Bitrate", `${s.bestAudio.kbps} kbps`],
+            s.bestAudio?.khz && ["Sample rate", `${s.bestAudio.khz} kHz`],
+            s.bestAudio?.channels && ["Channels", s.bestAudio.channels > 2 ? `${s.bestAudio.channels} (surround)` : s.bestAudio.channels === 2 ? "Stereo" : "Mono"],
+          ]),
+          s.audioTracks.length > 1 && [h("p", { class: "sub-label" }, `Dubbed in ${s.audioTracks.length} languages`), h("ul", { class: "chips" }, s.audioTracks.map((t) => h("li", {}, t)))]),
+        group("file", "Files", "What a full download would weigh",
+          facts([
+            total > 0 && ["Full-quality size", `≈ ${bytes(total)}`],
+            ["Versions", `${s.count} files`],
+          ]),
+          h("p", { class: "sub-label" }, "Video codecs"),
+          h("ul", { class: "chips" }, s.codecs.map((c) => h("li", {}, c)))),
         h("div", { class: "actions" },
           h("button", { class: "button", onclick: () => openTab(`https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`) }, icon("image"), "Full-size thumbnail"),
           h("button", { class: "button button-accent", onclick: () => openTab(`${WEBSITE}/?url=${encodeURIComponent(currentUrl)}`) }, icon("download"), "Download")),
@@ -774,29 +813,40 @@ function hiddenPanel(tabId, videoId) {
 
     card("Hidden numbers", "video", (d) => {
       const e = d.engagement || {};
+      const f = d.forecast || {};
       return [
-        facts([
-          e.dislikes != null && ["Dislikes", compact(e.dislikes), null, "Estimated by Return YouTube Dislike; YouTube hides the real count."],
-          e.approval != null && ["Approval", `${e.approval}%`, e.approval >= 95 ? "good" : e.approval < 80 ? "warn" : null],
-          e.comment_rate != null && ["Comments per 1K views", String(e.comment_rate)],
-          d.forecast?.views_per_day_lifetime != null && ["Views a day", compact(d.forecast.views_per_day_lifetime), null, "Average over the video’s whole life"],
-          d.earnings?.per_day && ["Earns a day", range(d.earnings.per_day), null, "Estimate"],
-          d.forecast?.stage && ["Life stage", d.forecast.stage],
-          d.earnings && ["Runs ads", d.earnings.monetized_likely ? "Likely" : "Unlikely", d.earnings.monetized_likely ? "good" : "warn"],
-          d.forecast?.age_days != null && ["Age", d.forecast.age_days >= 365 ? `${(d.forecast.age_days / 365).toFixed(1)} years` : `${Math.round(d.forecast.age_days)} days`],
-        ]),
-        d.earnings?.factors?.length > 0 && h("details", { class: "how" },
-          h("summary", {}, "How the earnings estimate was made"),
-          h("ul", {}, d.earnings.factors.map((f) => h("li", {}, f)))),
+        origin("Numbers YouTube hides or never shows. Ones marked “est.” are estimates."),
+        group("heart", "Reactions", "How viewers really feel",
+          facts([
+            e.dislikes != null && ["Dislikes", compact(e.dislikes), "est", "From Return YouTube Dislike; YouTube hides the real count."],
+            e.approval != null && ["Approval", `${e.approval}%`, e.approval >= 95 ? "good" : e.approval < 80 ? "warn" : null],
+            e.comment_rate != null && ["Comments / 1K views", String(e.comment_rate)],
+          ])),
+        group("trend", "Growth", "Where the video is in its life",
+          facts([
+            f.views_per_day_lifetime != null && ["Views a day", compact(f.views_per_day_lifetime), null, "Average over its whole life"],
+            f.stage && ["Life stage", f.stage],
+            f.age_days != null && ["Age", f.age_days >= 365 ? `${(f.age_days / 365).toFixed(1)} years` : `${Math.round(f.age_days)} days`],
+          ])),
+        group("dollar", "Money", "What it likely makes from ads",
+          facts([
+            d.earnings?.per_day && ["Earns a day", range(d.earnings.per_day), "est"],
+            d.earnings && ["Runs ads", d.earnings.monetized_likely ? "Likely" : "Unlikely", d.earnings.monetized_likely ? "good" : "warn"],
+          ]),
+          d.earnings?.factors?.length > 0 && h("details", { class: "how" },
+            h("summary", {}, "How this estimate was made"),
+            h("ul", {}, d.earnings.factors.map((x) => h("li", {}, x))))),
       ];
     }, "mixed"),
 
     card("Sponsors & skippable parts", "video", (d) => {
       const segs = d.sponsor_segments;
-      if (segs == null) return h("p", { class: "muted" }, "SponsorBlock couldn’t be reached right now.");
-      if (!segs.length) return h("p", { class: "muted" }, "No sponsor reads, intros or reminders reported by viewers.");
+      const head = origin("Marked by viewers on SponsorBlock. Click a part to skip past it.");
+      if (segs == null) return [head, h("p", { class: "muted" }, "SponsorBlock couldn’t be reached right now.")];
+      if (!segs.length) return [head, h("p", { class: "muted" }, "No sponsor reads, intros or reminders reported yet.")];
       const dur = d.duration_seconds || Math.max(...segs.map((s) => s.end));
       return [
+        head,
         h("div", { class: "seg-bar", role: "img", "aria-label": `${segs.length} marked parts` },
           segs.map((s) => h("span", { class: `seg seg-${s.category}`, style: { left: `${(s.start / dur) * 100}%`, width: `${Math.max(((s.end - s.start) / dur) * 100, 1)}%` } }))),
         segs.map((s) =>
@@ -805,7 +855,6 @@ function hiddenPanel(tabId, videoId) {
             h("span", { class: "moment-time" }, clock(s.start)),
             h("span", {}, s.label, h("span", { class: "muted small" }, ` · ${Math.round(s.end - s.start)}s`)),
             h("span", { class: "play" }, icon("skip")))),
-        h("p", { class: "note" }, "Marked by viewers on SponsorBlock. Click to skip past a part."),
       ];
     }),
 
@@ -814,54 +863,187 @@ function hiddenPanel(tabId, videoId) {
       const r = d.upload_rhythm;
       const svl = d.shorts_vs_long;
       return [
-        facts([
-          ["Verified", yesNo(d.verified), d.verified ? "good" : null],
-          r?.status && ["Status", r.status, r.status === "inactive" ? "warn" : "good"],
-          r?.days_since_last != null && ["Last upload", r.days_since_last < 1 ? "today" : `${Math.round(r.days_since_last)} days ago`],
-          d.recent?.average_views != null && ["Average views", compact(d.recent.average_views)],
-          best && ["Best length", best.label],
-          svl?.shorts_sampled > 0 && ["Shorts vs long", `${compact(svl.shorts_median_views)} vs ${compact(svl.long_median_views)}`, null, "Median views"],
-        ]),
-        d.recent?.top?.length > 0 && [
-          h("h3", {}, "Their biggest recent uploads"),
+        origin("From the channel’s recent uploads."),
+        group("user", "Activity", "Is the creator still posting?",
+          facts([
+            ["Verified", yesNo(d.verified), d.verified ? "good" : null],
+            r?.status && ["Status", r.status, r.status === "inactive" ? "warn" : "good"],
+            r?.days_since_last != null && ["Last upload", r.days_since_last < 1 ? "today" : `${Math.round(r.days_since_last)} days ago`],
+          ])),
+        group("trend", "What works", "Which videos do best on this channel",
+          facts([
+            d.recent?.average_views != null && ["Average views", compact(d.recent.average_views)],
+            best && ["Best length", best.label],
+            svl?.shorts_sampled > 0 && ["Shorts vs long", `${compact(svl.shorts_median_views)} vs ${compact(svl.long_median_views)}`, null, "Median views"],
+          ])),
+        d.recent?.top?.length > 0 && group("play", "Biggest recent uploads", "Click to open",
           d.recent.top.slice(0, 3).map((v) =>
             h("button", { class: "upload", onclick: () => openTab(`https://www.youtube.com/watch?v=${v.id}`), title: v.title },
               h("img", { src: `https://i.ytimg.com/vi/${v.id}/default.jpg`, alt: "" }),
               h("span", { class: "upload-text" }, h("span", { class: "upload-title" }, v.title), h("span", { class: "muted small num" }, `${compact(v.views)} views`)),
-              icon("external"))),
-        ],
+              icon("external")))),
       ];
     }),
 
     card("Inside the comments", "comments", (d) => [
-      facts([
-        ["Total comments", compact(d.total)],
-        ["Creator replies", d.creator_replies ? `${d.creator_replies} in sample` : "None seen", d.creator_replies ? "good" : null],
-        ["Read", `${d.sampled} comments`],
-      ]),
-      d.pinned && [h("h3", {}, "Pinned by the creator"), h("blockquote", { class: "quote" }, d.pinned.text ?? d.pinned)],
-      d.keywords?.length > 0 && [h("h3", {}, "Words viewers use most"), h("ul", { class: "chips" }, d.keywords.slice(0, 12).map((k) => h("li", {}, k.word, h("small", { class: "num" }, ` ${k.count}`))))],
+      origin(`From a sample of ${d.sampled} comments.`),
+      group("chat", "Conversation", "How active the comment section is",
+        facts([
+          ["Total comments", compact(d.total)],
+          ["Creator replies", d.creator_replies ? `${d.creator_replies} seen` : "None seen", d.creator_replies ? "good" : null],
+        ])),
+      d.pinned && group("pin", "Pinned by the creator", "The comment they chose to show first",
+        h("blockquote", { class: "quote" }, d.pinned.text ?? String(d.pinned))),
+      d.keywords?.length > 0 && group("tag", "Most-used words", "What viewers keep talking about",
+        h("ul", { class: "chips" }, d.keywords.slice(0, 12).map((k) => h("li", {}, k.word, h("small", { class: "num" }, ` ${k.count}`))))),
     ])
   );
 }
 
-// ─── Analytics / Details / Hidden tabs ───
+// ─── Predictions tab: where this video is heading ───
+
+const years = (days) => (days >= 730 ? `${(days / 365).toFixed(1)} years` : days >= 60 ? `${Math.round(days / 30)} months` : `${Math.max(1, Math.round(days))} days`);
+const whenRange = ([fast, slow]) => (Math.abs(slow - fast) < 1 ? `in about ${years(fast)}` : `in ${years(fast)} – ${years(slow)}`);
+const dateIn = (days) => new Date(Date.now() + days * 864e5).toLocaleDateString(undefined, { month: "short", year: "numeric", ...(days < 120 ? { day: "numeric" } : {}) });
+const plus = ([a, b]) => `+${compact(a)} – ${compact(b)}`;
+
+// Past views (solid), the predicted range for the next year (shaded) and the middle path (dashed)
+function projectionChart(p) {
+  const W = 360, H = 96, PAD = 4;
+  const past = Math.min(p.age, 365), future = 365;
+  const t0 = p.age - past, t1 = p.age + future;
+  const at = (t, a) => p.views * (Math.max(t, 0.01) / p.age) ** a;
+  const yMin = at(t0, p.curve.aHigh) * 0.98, yMax = at(t1, p.curve.aHigh);
+  const x = (t) => PAD + ((t - t0) / (t1 - t0)) * (W - PAD * 2);
+  const y = (v) => H - PAD - ((v - yMin) / (yMax - yMin || 1)) * (H - PAD * 2 - 10);
+  const steps = 40;
+  const path = (from, to, a) => Array.from({ length: steps + 1 }, (_, i) => {
+    const t = from + ((to - from) * i) / steps;
+    return `${i ? "L" : "M"}${x(t).toFixed(1)} ${y(at(t, a)).toFixed(1)}`;
+  }).join(" ");
+  const high = path(p.age, t1, p.curve.aHigh);
+  const lowBack = Array.from({ length: steps + 1 }, (_, i) => {
+    const t = t1 - ((t1 - p.age) * i) / steps;
+    return `L${x(t).toFixed(1)} ${y(at(t, p.curve.aLow)).toFixed(1)}`;
+  }).join(" ");
+  return [
+    h("div", { class: "proj", role: "img", "aria-label": `Predicted views a year from now: ${compact(p.views + p.horizons[2].gain[0])} to ${compact(p.views + p.horizons[2].gain[1])}` },
+      svg({ viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", "aria-hidden": "true" },
+        { d: `${high} ${lowBack} Z`, class: "proj-band" },
+        { d: path(t0, p.age, p.curve.aMid), class: "proj-past" },
+        { d: path(p.age, t1, p.curve.aMid), class: "proj-mid" },
+        { d: `M${x(p.age)} 0V${H}`, class: "proj-now" }),
+      h("span", { class: "proj-dot", style: { left: `${(x(p.age) / W) * 100}%`, top: `${(y(p.views) / H) * 100}%` } })),
+    h("div", { class: "axis num" },
+      h("span", {}, past >= 365 ? "a year ago" : "uploaded"), h("span", { class: "axis-now" }, "now"), h("span", {}, "in a year")),
+  ];
+}
+
+function predictionsPanel() {
+  const needs = (p, render) => (p.available ? render(p) : h("p", { class: "muted" }, p.reason));
+  return h("div", { class: "panel", id: "panel-predictions", role: "tabpanel", "aria-labelledby": "tab-predictions", hidden: "" },
+    h("p", { class: "panel-intro" }, icon("spark"), "Where this video is heading, worked out from its growth so far and the channel’s own history. All predictions are ranges, not promises."),
+
+    card("Views ahead", "predict", (p) => needs(p, () => [
+      origin("If it keeps growing the way videos like it usually do."),
+      projectionChart(p),
+      facts([
+        ...p.horizons.map((hz) => [hz.label, plus(hz.gain), null, `${compact(p.views + hz.gain[0])} – ${compact(p.views + hz.gain[1])} views in total`]),
+        ["Views a day now", `${compact(p.perDay[0])} – ${compact(p.perDay[1])}`],
+        p.firstYearShare != null && ["First year done", `${Math.round(p.firstYearShare * 100)}%`, null, "Share of its first-year views it already has"],
+      ]),
+    ]), "estimate"),
+
+    card("Next milestones", "predict", (p) => needs(p, () => [
+      origin("When it should pass the next round numbers."),
+      p.milestones.length
+        ? p.milestones.map((m) => h("div", { class: "milestone" },
+            h("span", { class: "ms-flag" }, icon("flag")),
+            h("div", {}, h("strong", { class: "num" }, `${compact(m.views)} views`),
+              h("span", { class: "muted small" }, `${whenRange(m.days)} · around ${dateIn(m.days[0])}${Math.abs(m.days[1] - m.days[0]) > 30 ? ` – ${dateIn(m.days[1])}` : ""}`))))
+        : h("p", { class: "muted" }, "Growth has slowed too much to reach the next milestone within 20 years."),
+    ]), "estimate"),
+
+    card("Against the channel", "predict", (p) => needs(p, () => {
+      const v = p.vsTypical;
+      const tone = v && (v.ratio >= 1.5 ? "good" : v.ratio < 0.67 ? "warn" : null);
+      const verdict = !v ? null : v.ratio >= 3 ? "Breakout: likely one of the channel’s hits"
+        : v.ratio >= 1.5 ? "Ahead of a typical upload" : v.ratio >= 0.67 ? "On track for a typical upload" : "Behind a typical upload";
+      return [
+        origin("Compared at the same age, so new and old videos are judged fairly."),
+        verdict && h("p", { class: `verdict verdict-${tone || "mid"}` }, verdict),
+        facts([
+          v && ["vs typical at this age", `${v.ratio >= 10 ? Math.round(v.ratio) : v.ratio.toFixed(1)}×`, tone, `A typical upload has about ${compact(v.expected)} views at this age`],
+          p.rank && ["Rank in a year", `#${p.rank.position} of ${p.rank.of}`, p.rank.position <= 3 ? "good" : null, "Among the channel’s recent uploads"],
+        ]),
+        !v && !p.rank && h("p", { class: "muted small" }, "Not enough comparable uploads on this channel to judge."),
+      ];
+    }), "estimate"),
+
+    card("Money ahead", "predict", (p) => needs(p, () =>
+      p.earnings
+        ? [origin("Ad earnings from the predicted views, at this video’s estimated rate."),
+            facts([["Next 30 days", range(p.earnings.month)], ["Next year", range(p.earnings.year)]])]
+        : h("p", { class: "muted" }, "The channel probably can’t run ads yet, so no ad earnings are expected.")), "estimate"),
+
+    card("Creator’s next upload", "predict", (p) => needs(p, () => {
+      const n = p.nextUpload;
+      if (!n) return h("p", { class: "muted" }, "Not enough recent uploads to see a rhythm.");
+      const overdue = n.dueInDays < 0;
+      return [
+        origin(n.approximate ? "From the gaps between recent uploads (YouTube shows rough dates, so this is approximate)." : "From the gaps between recent uploads."),
+        facts([
+          ["Usually posts every", years(n.usualGapDays)],
+          [overdue ? "Overdue by" : "Next upload expected", overdue ? years(-n.dueInDays) : `in ~${years(n.dueInDays)}`, overdue ? "warn" : null],
+          !overdue && ["Around", dateIn(n.dueInDays)],
+        ]),
+      ];
+    }), "estimate"),
+
+    card("How these were made", "predict", (p) => needs(p, () => [
+      h("p", { class: "method" },
+        "Views on YouTube grow fast at first, then slow down: lifetime views follow a curve like views × (age)",
+        h("sup", {}, "a"), ". ",
+        p.exponent.fitted
+          ? `The steepness (a = ${p.exponent.low.toFixed(2)}–${p.exponent.high.toFixed(2)}) was fitted to this channel’s last ${p.exponent.n} uploads (fit quality R² = ${p.exponent.r2.toFixed(2)}).`
+          : `This channel’s uploads didn’t show a clear enough pattern${p.exponent.n ? ` (R² = ${(p.exponent.r2 ?? 0).toFixed(2)} over ${p.exponent.n} uploads)` : ""}, so the typical YouTube range was used (a = ${p.exponent.low}–${p.exponent.high}).`),
+      h("p", { class: "note" }, "A sudden boost (going viral, a shout-out, the algorithm picking it up) can beat these ranges; a video that stops being recommended can fall short."),
+    ]), "estimate"),
+  );
+}
+
+// ─── Analytics / Details / Hidden / Predictions tabs ───
 
 const TABS = [
   { id: "analytics", label: "Analytics" },
   { id: "details", label: "Details" },
-  { id: "hidden", label: "Hidden", badge: true },
+  { id: "hidden", label: "Hidden", icon: "eye" },
+  { id: "predictions", label: "Predictions", icon: "spark", badge: true },
 ];
 
 function tabBar(panels) {
   const underline = () => svg({ class: "underline", viewBox: "0 0 100 8", preserveAspectRatio: "none", "aria-hidden": "true" }, "M2 5c20-3 45-4 96-1");
   const buttons = TABS.map((t) =>
     h("button", { role: "tab", id: `tab-${t.id}`, "aria-controls": `panel-${t.id}`, class: "tab", onclick: () => select(t.id) },
-      t.badge && icon("eye"), t.label, t.badge && h("span", { class: "tab-new" }, "new")));
+      t.icon && icon(t.icon), t.label, t.badge && h("span", { class: "tab-new" }, "new")));
   const bar = h("div", { class: "tabs", role: "tablist", "aria-label": "View" }, buttons);
 
+  // Each tab keeps its own scroll position, so switching back returns to the same spot
   let current;
+  const scrollOf = {};
+  // Where the tab bar starts sticking under the header (= a tab's own top). Measured from the
+  // element above the bar, because a stuck sticky bar reports its stuck position, not its real one.
+  const tabsTop = () => {
+    const above = bar.previousElementSibling;
+    if (!above) return 0;
+    const gap = parseFloat(getComputedStyle(bar.parentElement).rowGap) || 0;
+    return Math.max(0, above.getBoundingClientRect().bottom + window.scrollY + gap - document.querySelector(".top").offsetHeight);
+  };
+
   function select(id) {
+    if (id === current) return;
+    if (current) scrollOf[current] = window.scrollY;
+    const wasStuck = window.scrollY >= tabsTop();
     current = id;
     TABS.forEach((t, i) => {
       const on = t.id === id;
@@ -871,6 +1053,10 @@ function tabBar(panels) {
       if (on) buttons[i].append(underline());
       panels[t.id].hidden = !on;
     });
+    // Back to where this tab was left; a tab opened for the first time starts at its top
+    // (only if the page was scrolled past the tab bar; otherwise stay put)
+    const target = scrollOf[id] ?? (wasStuck ? tabsTop() : window.scrollY);
+    window.scrollTo(0, target);
     try {
       localStorage.setItem("viewlens-tab", id);
     } catch {
@@ -929,16 +1115,41 @@ async function main() {
     return;
   }
   currentUrl = url;
-  API_BASE = await pickServer();
   checkServer();
-  if (API_BASE === LOCAL_API) {
-    document.querySelector(".brand").append(h("span", { class: "server-tag", title: LOCAL_API }, "Local server"));
-  }
 
   const videoId = videoIdFrom(url);
   sources.page = () => readPage(tab.id, videoId);
-  const panels = { analytics: analyticsPanel(tab.id), details: detailsPanel(tab.id), hidden: hiddenPanel(tab.id, videoId) };
-  app.replaceChildren(heroCard(videoId), kpiStrip(), tabBar(panels), panels.analytics, panels.details, panels.hidden);
+
+  // Video facts and estimates are worked out in the browser first: YouTube often blocks the
+  // free server ("confirm you're not a bot") but not the viewer's own browser. The server is the backup.
+  let local = null;
+  const fromBrowser = () => (local ??= readLocal(videoId, url).catch((err) => {
+    local = null;
+    throw err;
+  }));
+  sources.video = () => fromBrowser().then((d) => d.video).catch(() => get("/api/insights", currentUrl));
+  sources.details = () => fromBrowser().then((d) => d.details).catch(() => get("/api/metadata", currentUrl));
+  sources.channel = () => fromBrowser().then((d) => readChannel(d.info)).catch(() => get("/api/insights/channel", currentUrl));
+  sources.comments = () => fromBrowser().then((d) => readComments(videoId, d.info.title)).catch(() => get("/api/insights/comments", currentUrl));
+  // Captions need the server; if YouTube blocks it, read YouTube's own transcript panel when it's open
+  sources.transcript = () => get("/api/insights/transcript", currentUrl)
+    .then((d) => (d.available ? d : Promise.reject(new Error(d.reason))))
+    .catch(async (err) => {
+      const [{ result: rows } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "MAIN", func: pageTranscript }).catch(() => []);
+      if (rows?.length) return analyseTranscript(rows, (await fromBrowser()).info);
+      if (err.message === "none") return { available: false, reason: "none" };
+      throw new Error("Open “…more” under the video, click “Show transcript”, then press Try again.");
+    });
+  // Predictions: from the video and (if it loads) the channel's uploads
+  sources.predict = async () => {
+    const video = await loadPart("video");
+    const channel = await waitFor("channel").catch(() => null);
+    return buildPredictions(video, channel);
+  };
+  const panels = {
+    analytics: analyticsPanel(tab.id), details: detailsPanel(tab.id), hidden: hiddenPanel(tab.id, videoId), predictions: predictionsPanel(),
+  };
+  app.replaceChildren(heroCard(videoId), kpiStrip(), tabBar(panels), panels.analytics, panels.details, panels.hidden, panels.predictions);
 
   // The page's own player data needs no server, so read it straight away
   loadPart("page").catch(() => {});
@@ -948,7 +1159,7 @@ async function main() {
   loadPart("video")
     .catch(() => {})
     .then(async () => {
-      for (const p of ["details", "channel", "transcript", "comments"]) await loadPart(p).catch(() => {});
+      for (const p of ["details", "channel", "predict", "transcript", "comments"]) await loadPart(p).catch(() => {});
     });
 }
 

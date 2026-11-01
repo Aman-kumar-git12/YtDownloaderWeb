@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Viewlens – video insights",
   "short_name": "Viewlens",
-  "version": "1.1.0",
+  "version": "1.5.0",
   "description": "See estimated earnings, the most replayed moments, channel comparisons and comment mood for the video you're watching.",
   "action": {
     "default_popup": "popup.html",
@@ -22,10 +22,19 @@
   },
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage",
+    "alarms"
   ],
   "host_permissions": [
-    "https://viewlens-api.onrender.com/*",
-    "http://localhost:8001/*"
-  ]
+    "https://m.youtube.com/*",
+    "https://www.youtube.com/*",
+    "https://returnyoutubedislikeapi.com/*",
+    "https://sponsor.ajay.app/*",
+    "https://viewlens-api.onrender.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
 }
