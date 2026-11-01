@@ -3,8 +3,13 @@
 Insights for the video you're watching. It opens with **What stands out**: the 4 most important findings
 (good signs, warnings and things worth knowing), then estimated earnings, how it compares with the channel,
 the most replayed moments (click to jump), engagement, comment mood and the transcript's topics.
-Two tabs: **Analytics** (the insights) and **Details** (numbers, upload date, length, quality, description, clickable chapters, tags and caption languages).
-It is analysis only; it has no download features, so it fits the Chrome Web Store rules.
+Three tabs: **Analytics** (the insights), **Details** (numbers, upload date, length, quality, description, clickable chapters,
+tags and caption languages) and **Hidden** (what the player knows but doesn't show: loudness normalisation, planned ad
+breaks, paid-promotion flag, exact upload time, stream codecs and sizes, SponsorBlock segments, estimated dislikes,
+channel activity and comment keywords). The Hidden tab reads the YouTube tab's own player data, so it needs no server.
+
+The **dwnld** button (top right) opens the website with the current video filled in. Because it links to a downloader,
+the extension is distributed through GitHub Releases rather than the Chrome Web Store.
 
 ## Try it locally
 1. Open `chrome://extensions`, turn on **Developer mode**.

@@ -1,4 +1,4 @@
-import { DEPLOYED_API, LOCAL_API } from "./config.js";
+import { DEPLOYED_API, LOCAL_API, WEBSITE } from "./config.js";
 import { buildHighlights } from "./lib/highlights.js";
 
 const app = document.getElementById("app");
@@ -47,6 +47,12 @@ const ICONS = {
   refresh: ["M21 12a9 9 0 1 1-2.6-6.4L21 8", "M21 3v5h-5"],
   copy: ["M9 9h11v11H9z", "M5 15H4V4h11v1"],
   check: ["M20 6 9 17l-5-5"],
+  download: ["M12 4v11", "m7 10 5 5 5-5", "M5 20h14"],
+  external: ["M14 4h6v6", "M20 4l-9 9", "M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"],
+  volume: ["M11 5 6 9H2v6h4l5 4V5Z", "M15.5 8.5a5 5 0 0 1 0 7", "M19 5a10 10 0 0 1 0 14"],
+  eye: ["M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z", "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"],
+  skip: ["M5 4l10 8-10 8V4Z", "M19 5v14"],
+  image: ["M3 5h18v14H3z", "m3 16 5-5 4 4 3-3 6 6", "M15.5 8.5h.01"],
 };
 const icon = (name, label) =>
   svg({ class: "icon", viewBox: "0 0 24 24", ...(label ? { role: "img", "aria-label": label } : { "aria-hidden": "true" }) }, ...ICONS[name]);
@@ -157,11 +163,14 @@ function waitFor(name) {
   return waiting[name].promise;
 }
 
+// Parts that don't come from the server (e.g. "page", read from the YouTube tab itself)
+const sources = {};
+
 function loadPart(name, retry = false) {
   if (!parts[name] || retry) {
     const path = { video: "/api/insights", details: "/api/metadata" }[name] || `/api/insights/${name}`;
     failed.delete(name);
-    parts[name] = get(path, currentUrl).then((data) => {
+    parts[name] = (sources[name] ? sources[name]() : get(path, currentUrl)).then((data) => {
       partData[name] = data;
       changed();
       return data;
@@ -580,17 +589,275 @@ function detailsPanel(tabId) {
   );
 }
 
-// ─── Analytics / Details tabs ───
+// ─── Hidden tab: things YouTube knows but doesn't show ───
+
+// Runs inside the YouTube page (MAIN world), so it must be self-contained.
+// Reads the player's own data for this video and returns a small, plain summary.
+function pagePlayerInfo(wantedId) {
+  let p = null;
+  for (const id of ["movie_player", "shorts-player"]) {
+    try {
+      const r = document.getElementById(id)?.getPlayerResponse?.();
+      if (r?.videoDetails?.videoId === wantedId) {
+        p = r;
+        break;
+      }
+    } catch {
+      // player not ready
+    }
+  }
+  if (!p && window.ytInitialPlayerResponse?.videoDetails?.videoId === wantedId) p = window.ytInitialPlayerResponse;
+  if (!p) return { found: false };
+
+  const mf = p.microformat?.playerMicroformatRenderer || {};
+  const vd = p.videoDetails || {};
+  const formats = p.streamingData?.adaptiveFormats || [];
+  const CODECS = { av01: "AV1", vp9: "VP9", vp09: "VP9", avc1: "H.264", opus: "Opus", mp4a: "AAC", "ec-3": "Dolby Digital+", "ac-3": "Dolby Digital" };
+  const codecOf = (mime = "") => {
+    const c = (mime.match(/codecs="([^".,]+)/) || [])[1] || "";
+    return CODECS[c] || c.toUpperCase() || "Unknown";
+  };
+  const video = formats.filter((f) => f.mimeType?.startsWith("video/"));
+  const audio = formats.filter((f) => f.mimeType?.startsWith("audio/"));
+  const bestV = [...video].sort((a, b) => (b.height || 0) - (a.height || 0) || (b.bitrate || 0) - (a.bitrate || 0))[0];
+  const bestA = [...audio].sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+  const HDR = ["COLOR_TRANSFER_CHARACTERISTICS_SMPTEST2084", "COLOR_TRANSFER_CHARACTERISTICS_ARIB_STD_B67"];
+
+  const ads = (p.adPlacements || [])
+    .map((a) => a.adPlacementRenderer?.config?.adPlacementConfig)
+    .filter(Boolean)
+    .map((c) => (c.kind === "AD_PLACEMENT_KIND_START" ? 0 : c.kind === "AD_PLACEMENT_KIND_END" ? -1 : Number(c.adTimeOffset?.offsetStartMilliseconds) / 1000))
+    .filter((x) => !Number.isNaN(x));
+  const captions = p.captions?.playerCaptionsTracklistRenderer;
+  const captionTracks = captions?.captionTracks || [];
+
+  return {
+    found: true,
+    loudnessDb: p.playerConfig?.audioConfig?.loudnessDb ?? null,
+    ads: [...new Set(ads)].sort((a, b) => (a === -1) - (b === -1) || a - b),
+    playerAds: Boolean(p.playerAds?.length),
+    paidPromotion: Boolean(p.paidContentOverlay),
+    familySafe: mf.isFamilySafe ?? null,
+    unlisted: mf.isUnlisted ?? null,
+    publishDate: mf.publishDate || mf.uploadDate || null,
+    countries: mf.availableCountries?.length ?? null,
+    allowRatings: vd.allowRatings ?? null,
+    crawlable: vd.isCrawlable ?? null,
+    embeddable: p.playabilityStatus?.playableInEmbed ?? null,
+    keywords: vd.keywords?.length ?? 0,
+    endscreen: p.endscreen?.endscreenRenderer?.elements?.length ?? 0,
+    cards: p.cards?.cardCollectionRenderer?.cards?.length ?? 0,
+    autoCaptions: captionTracks.some((t) => t.kind === "asr"),
+    creatorCaptions: captionTracks.filter((t) => t.kind !== "asr").length,
+    translatable: captions?.translationLanguages?.length ?? 0,
+    streams: formats.length
+      ? {
+          count: formats.length,
+          codecs: [...new Set(video.map((f) => codecOf(f.mimeType)))],
+          hdr: video.some((f) => /HDR/i.test(f.qualityLabel || "") || HDR.includes(f.colorInfo?.transferCharacteristics)),
+          vr: video.some((f) => f.projectionType && f.projectionType !== "RECTANGULAR"),
+          audioTracks: [...new Set(audio.map((f) => f.audioTrack?.displayName).filter(Boolean))],
+          bestVideo: bestV && { label: bestV.qualityLabel, codec: codecOf(bestV.mimeType), mbps: (bestV.bitrate || 0) / 1e6, size: Number(bestV.contentLength) || null },
+          bestAudio: bestA && {
+            codec: codecOf(bestA.mimeType),
+            kbps: Math.round((bestA.averageBitrate || bestA.bitrate || 0) / 1000),
+            khz: Number(bestA.audioSampleRate) / 1000 || null,
+            channels: bestA.audioChannels || null,
+            size: Number(bestA.contentLength) || null,
+          },
+        }
+      : null,
+  };
+}
+
+async function readPage(tabId, videoId) {
+  let result;
+  try {
+    [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: pagePlayerInfo, args: [videoId] });
+  } catch {
+    throw new Error("Couldn’t read the YouTube tab. Reload it and try again.");
+  }
+  if (!result?.found) throw new Error("The player isn’t ready yet. Let the video start, then try again.");
+  return result;
+}
+
+const bytes = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`);
+const yesNo = (v, yes = "Yes", no = "No") => (v == null ? "Unknown" : v ? yes : no);
+
+// Two-column tiles: label, value and a tone dot (good / warn / plain)
+function facts(items) {
+  return h("div", { class: "facts" },
+    items.filter(Boolean).map(([label, value, tone, hint]) =>
+      h("div", { class: `fact${tone ? ` fact-${tone}` : ""}${String(value).length > 16 ? " fact-wide" : ""}`, title: hint || null },
+        h("span", { class: "fact-label" }, label),
+        h("strong", { class: "fact-value" }, tone && h("i", { class: "dot", "aria-hidden": "true" }), value))));
+}
+
+// Loudness on a −12…+12 dB scale; YouTube's target is the 0 line
+function loudness(db) {
+  const clamped = Math.max(-12, Math.min(12, db));
+  const verdict = db > 1 ? `Mastered loud: YouTube turns it down ${db.toFixed(1)} dB`
+    : db < -1 ? `Quieter than YouTube’s level by ${Math.abs(db).toFixed(1)} dB (not boosted)`
+      : "Right at YouTube’s normal loudness";
+  return h("div", { class: "loud" },
+    h("div", { class: "loud-top" }, icon("volume"), h("span", {}, verdict)),
+    h("div", { class: "loud-track", role: "img", "aria-label": verdict },
+      h("span", { class: "loud-zero" }),
+      h("span", { class: `loud-fill ${db >= 0 ? "is-up" : "is-down"}`, style: db >= 0 ? { left: "50%", width: `${(clamped / 24) * 100}%` } : { right: "50%", width: `${(-clamped / 24) * 100}%` } })),
+    h("div", { class: "loud-scale small num" }, h("span", {}, "quieter"), h("span", {}, "YouTube level"), h("span", {}, "louder")));
+}
+
+function exactTime(iso) {
+  if (!iso) return "Unknown";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return iso.includes("T")
+    ? d.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+const openTab = (url) => chrome.tabs.create({ url });
+
+function hiddenPanel(tabId, videoId) {
+  return h("div", { class: "panel", id: "panel-hidden", role: "tabpanel", "aria-labelledby": "tab-hidden", hidden: "" },
+    h("p", { class: "panel-intro" }, icon("eye"), "Things YouTube knows about this video but doesn’t show you."),
+
+    card("Behind the player", "page", (d) => [
+      d.loudnessDb != null && loudness(d.loudnessDb),
+      facts([
+        ["Ad breaks", d.ads.length ? `${d.ads.length} planned` : d.playerAds ? "Yes" : "None sent", null,
+          "Ad slots YouTube sent with this video. An ad blocker can hide them."],
+        ["Paid promotion", d.paidPromotion ? "Declared" : "Not declared", d.paidPromotion ? "warn" : null],
+        ["Uploaded at", exactTime(d.publishDate)],
+        ["Family-safe", yesNo(d.familySafe), d.familySafe === false ? "warn" : null],
+        ["Unlisted", yesNo(d.unlisted), d.unlisted ? "warn" : null],
+        ["Likes shown", yesNo(d.allowRatings, "Yes", "Hidden by creator"), d.allowRatings === false ? "warn" : null],
+        ["In search", yesNo(d.crawlable), d.crawlable === false ? "warn" : null],
+        ["Embeds", yesNo(d.embeddable, "Allowed", "Blocked")],
+        d.countries != null && ["Countries", `${d.countries} allowed`],
+        ["Hidden tags", String(d.keywords)],
+        ["End screen", d.endscreen ? `${d.endscreen} items` : "None"],
+        ["Info cards", d.cards ? String(d.cards) : "None"],
+        ["Captions", d.creatorCaptions ? `${d.creatorCaptions} by creator` : d.autoCaptions ? "Auto only" : "None"],
+        d.translatable > 0 && ["Auto-translate", `${d.translatable} languages`],
+      ]),
+      d.ads.length > 0 && h("div", { class: "ad-marks" },
+        h("span", { class: "muted small" }, "Ads at"),
+        d.ads.map((t) => t === -1 ? h("span", { class: "chip-time" }, "end")
+          : t === 0 ? h("span", { class: "chip-time" }, "start")
+            : h("button", { class: "chip-time", onclick: () => seek(tabId, t), title: "Jump here" }, clock(t)))),
+    ]),
+
+    card("Streams & quality", "page", (d) => {
+      const s = d.streams;
+      if (!s) return h("p", { class: "muted" }, "YouTube didn’t share the stream list with this page.");
+      const total = (s.bestVideo?.size || 0) + (s.bestAudio?.size || 0);
+      return [
+        facts([
+          s.bestVideo && ["Best video", `${s.bestVideo.label} · ${s.bestVideo.codec}`],
+          s.bestVideo?.mbps > 0 && ["Video bitrate", `${s.bestVideo.mbps.toFixed(1)} Mbps`],
+          s.bestAudio && ["Best audio", `${s.bestAudio.codec} · ${s.bestAudio.kbps} kbps`],
+          s.bestAudio?.khz && ["Sample rate", `${s.bestAudio.khz} kHz${s.bestAudio.channels > 2 ? ` · ${s.bestAudio.channels} ch` : s.bestAudio.channels === 2 ? " · stereo" : ""}`],
+          ["HDR", yesNo(s.hdr), s.hdr ? "good" : null],
+          ["360° / VR", yesNo(s.vr), s.vr ? "good" : null],
+          total > 0 && ["Full-quality size", `≈ ${bytes(total)}`],
+          ["Streams", `${s.count} files`],
+        ]),
+        h("h3", {}, "Video codecs"),
+        h("ul", { class: "chips" }, s.codecs.map((c) => h("li", {}, c))),
+        s.audioTracks.length > 1 && [h("h3", {}, `Audio in ${s.audioTracks.length} languages`), h("ul", { class: "chips" }, s.audioTracks.map((t) => h("li", {}, t)))],
+        h("div", { class: "actions" },
+          h("button", { class: "button", onclick: () => openTab(`https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`) }, icon("image"), "Full-size thumbnail"),
+          h("button", { class: "button button-accent", onclick: () => openTab(`${WEBSITE}/?url=${encodeURIComponent(currentUrl)}`) }, icon("download"), "Download")),
+      ];
+    }),
+
+    card("Hidden numbers", "video", (d) => {
+      const e = d.engagement || {};
+      return [
+        facts([
+          e.dislikes != null && ["Dislikes", compact(e.dislikes), null, "Estimated by Return YouTube Dislike; YouTube hides the real count."],
+          e.approval != null && ["Approval", `${e.approval}%`, e.approval >= 95 ? "good" : e.approval < 80 ? "warn" : null],
+          e.comment_rate != null && ["Comments per 1K views", String(e.comment_rate)],
+          d.forecast?.views_per_day_lifetime != null && ["Views a day", compact(d.forecast.views_per_day_lifetime), null, "Average over the video’s whole life"],
+          d.earnings?.per_day && ["Earns a day", range(d.earnings.per_day), null, "Estimate"],
+          d.forecast?.stage && ["Life stage", d.forecast.stage],
+          d.earnings && ["Runs ads", d.earnings.monetized_likely ? "Likely" : "Unlikely", d.earnings.monetized_likely ? "good" : "warn"],
+          d.forecast?.age_days != null && ["Age", d.forecast.age_days >= 365 ? `${(d.forecast.age_days / 365).toFixed(1)} years` : `${Math.round(d.forecast.age_days)} days`],
+        ]),
+        d.earnings?.factors?.length > 0 && h("details", { class: "how" },
+          h("summary", {}, "How the earnings estimate was made"),
+          h("ul", {}, d.earnings.factors.map((f) => h("li", {}, f)))),
+      ];
+    }, "mixed"),
+
+    card("Sponsors & skippable parts", "video", (d) => {
+      const segs = d.sponsor_segments;
+      if (segs == null) return h("p", { class: "muted" }, "SponsorBlock couldn’t be reached right now.");
+      if (!segs.length) return h("p", { class: "muted" }, "No sponsor reads, intros or reminders reported by viewers.");
+      const dur = d.duration_seconds || Math.max(...segs.map((s) => s.end));
+      return [
+        h("div", { class: "seg-bar", role: "img", "aria-label": `${segs.length} marked parts` },
+          segs.map((s) => h("span", { class: `seg seg-${s.category}`, style: { left: `${(s.start / dur) * 100}%`, width: `${Math.max(((s.end - s.start) / dur) * 100, 1)}%` } }))),
+        segs.map((s) =>
+          h("button", { class: "moment", onclick: () => seek(tabId, s.end), title: "Skip past it" },
+            h("span", { class: `seg-key seg-${s.category}` }),
+            h("span", { class: "moment-time" }, clock(s.start)),
+            h("span", {}, s.label, h("span", { class: "muted small" }, ` · ${Math.round(s.end - s.start)}s`)),
+            h("span", { class: "play" }, icon("skip")))),
+        h("p", { class: "note" }, "Marked by viewers on SponsorBlock. Click to skip past a part."),
+      ];
+    }),
+
+    card("About the channel", "channel", (d) => {
+      const best = [...(d.by_length || [])].filter((b) => b.videos >= 3).sort((a, b) => b.vs_channel - a.vs_channel)[0];
+      const r = d.upload_rhythm;
+      const svl = d.shorts_vs_long;
+      return [
+        facts([
+          ["Verified", yesNo(d.verified), d.verified ? "good" : null],
+          r?.status && ["Status", r.status, r.status === "inactive" ? "warn" : "good"],
+          r?.days_since_last != null && ["Last upload", r.days_since_last < 1 ? "today" : `${Math.round(r.days_since_last)} days ago`],
+          d.recent?.average_views != null && ["Average views", compact(d.recent.average_views)],
+          best && ["Best length", best.label],
+          svl?.shorts_sampled > 0 && ["Shorts vs long", `${compact(svl.shorts_median_views)} vs ${compact(svl.long_median_views)}`, null, "Median views"],
+        ]),
+        d.recent?.top?.length > 0 && [
+          h("h3", {}, "Their biggest recent uploads"),
+          d.recent.top.slice(0, 3).map((v) =>
+            h("button", { class: "upload", onclick: () => openTab(`https://www.youtube.com/watch?v=${v.id}`), title: v.title },
+              h("img", { src: `https://i.ytimg.com/vi/${v.id}/default.jpg`, alt: "" }),
+              h("span", { class: "upload-text" }, h("span", { class: "upload-title" }, v.title), h("span", { class: "muted small num" }, `${compact(v.views)} views`)),
+              icon("external"))),
+        ],
+      ];
+    }),
+
+    card("Inside the comments", "comments", (d) => [
+      facts([
+        ["Total comments", compact(d.total)],
+        ["Creator replies", d.creator_replies ? `${d.creator_replies} in sample` : "None seen", d.creator_replies ? "good" : null],
+        ["Read", `${d.sampled} comments`],
+      ]),
+      d.pinned && [h("h3", {}, "Pinned by the creator"), h("blockquote", { class: "quote" }, d.pinned.text ?? d.pinned)],
+      d.keywords?.length > 0 && [h("h3", {}, "Words viewers use most"), h("ul", { class: "chips" }, d.keywords.slice(0, 12).map((k) => h("li", {}, k.word, h("small", { class: "num" }, ` ${k.count}`))))],
+    ])
+  );
+}
+
+// ─── Analytics / Details / Hidden tabs ───
 
 const TABS = [
   { id: "analytics", label: "Analytics" },
   { id: "details", label: "Details" },
+  { id: "hidden", label: "Hidden", badge: true },
 ];
 
 function tabBar(panels) {
   const underline = () => svg({ class: "underline", viewBox: "0 0 100 8", preserveAspectRatio: "none", "aria-hidden": "true" }, "M2 5c20-3 45-4 96-1");
   const buttons = TABS.map((t) =>
-    h("button", { role: "tab", id: `tab-${t.id}`, "aria-controls": `panel-${t.id}`, class: "tab", onclick: () => select(t.id) }, t.label));
+    h("button", { role: "tab", id: `tab-${t.id}`, "aria-controls": `panel-${t.id}`, class: "tab", onclick: () => select(t.id) },
+      t.badge && icon("eye"), t.label, t.badge && h("span", { class: "tab-new" }, "new")));
   const bar = h("div", { class: "tabs", role: "tablist", "aria-label": "View" }, buttons);
 
   let current;
@@ -646,7 +913,18 @@ async function main() {
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab?.url || "";
-  if (!VIDEO_URL.test(url)) {
+  const onVideo = VIDEO_URL.test(url);
+
+  // dwnld: open the website with this video already filled in
+  const dwnld = document.getElementById("dwnld");
+  dwnld.querySelector(".dwnld-icon").append(icon("download"));
+  dwnld.href = onVideo ? `${WEBSITE}/?url=${encodeURIComponent(url)}` : WEBSITE;
+  dwnld.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: dwnld.href });
+  });
+
+  if (!onVideo) {
     app.replaceChildren(emptyState());
     return;
   }
@@ -657,8 +935,13 @@ async function main() {
     document.querySelector(".brand").append(h("span", { class: "server-tag", title: LOCAL_API }, "Local server"));
   }
 
-  const panels = { analytics: analyticsPanel(tab.id), details: detailsPanel(tab.id) };
-  app.replaceChildren(heroCard(videoIdFrom(url)), kpiStrip(), tabBar(panels), panels.analytics, panels.details);
+  const videoId = videoIdFrom(url);
+  sources.page = () => readPage(tab.id, videoId);
+  const panels = { analytics: analyticsPanel(tab.id), details: detailsPanel(tab.id), hidden: hiddenPanel(tab.id, videoId) };
+  app.replaceChildren(heroCard(videoId), kpiStrip(), tabBar(panels), panels.analytics, panels.details, panels.hidden);
+
+  // The page's own player data needs no server, so read it straight away
+  loadPart("page").catch(() => {});
 
   // Ask in stages so the small free server isn't hit with five lookups at once:
   // the video first (it's cached for everything else), then the rest one by one.
