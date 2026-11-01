@@ -112,6 +112,19 @@ async function pickServer() {
 
 let API_BASE = DEPLOYED_API;
 
+// "awake" if /health answers within 3 s, otherwise "asleep" (the free server is starting up).
+// serverAwake flips to true once /health finally answers, so the popup can say the server is up.
+let serverAwake = false;
+let serverStatus = Promise.resolve("awake");
+
+function checkServer() {
+  const health = fetch(`${API_BASE}/health`, { cache: "no-store" })
+    .then((r) => { serverAwake = r.ok; })
+    .catch(() => {});
+  const slow = new Promise((resolve) => setTimeout(() => resolve("asleep"), 3000));
+  serverStatus = Promise.race([health.then(() => "awake"), slow]);
+}
+
 // ─── Data: each part is fetched once and shared by every card that uses it ───
 
 async function get(path, url) {
@@ -212,15 +225,22 @@ function heroCard(videoId) {
   const text = h("div", { class: "hero-text" }, h("div", { class: "skeleton" }), h("div", { class: "skeleton short" }));
   const el = h("section", { class: "hero" }, thumb, text);
 
-  // Render's free server sleeps; say so if the first answer is slow
-  const wakeTimer = setTimeout(() => {
-    if (!partData.video && !failed.has("video")) {
-      text.replaceChildren(
-        h("div", { class: "skeleton" }),
-        h("p", { class: "waking" }, h("span", { class: "pulse" }), "Waking up the server, this can take a minute…")
-      );
-    }
-  }, 4000);
+  // Render's free server sleeps. Only say "waking up" when the health check itself is slow
+  // (a sleeping server), not when an awake server is just taking a few seconds on a video.
+  let wakeTimer;
+  serverStatus.then((status) => {
+    if (status !== "asleep" || partData.video || failed.has("video")) return;
+    const started = Date.now();
+    const message = h("span", {}, "Waking up the server, this can take up to a minute…");
+    text.replaceChildren(h("div", { class: "skeleton" }), h("p", { class: "waking" }, h("span", { class: "pulse" }), message));
+    wakeTimer = setInterval(() => {
+      if (partData.video || failed.has("video")) return clearInterval(wakeTimer);
+      const seconds = Math.round((Date.now() - started) / 1000) + 3;
+      message.textContent = serverAwake
+        ? "Server is up, analysing the video…"
+        : `Waking up the server, this can take up to a minute… ${seconds}s`;
+    }, 1000);
+  });
 
   const render = () => {
     const d = partData.video;
@@ -228,7 +248,7 @@ function heroCard(videoId) {
       if (failed.has("video")) text.replaceChildren(h("p", { class: "muted" }, "Couldn’t load this video."));
       return;
     }
-    clearTimeout(wakeTimer);
+    clearInterval(wakeTimer);
     if (d.duration_seconds && !thumb.querySelector(".duration")) {
       thumb.append(h("span", { class: "duration num" }, clock(d.duration_seconds)));
     }
@@ -632,6 +652,7 @@ async function main() {
   }
   currentUrl = url;
   API_BASE = await pickServer();
+  checkServer();
   if (API_BASE === LOCAL_API) {
     document.querySelector(".brand").append(h("span", { class: "server-tag", title: LOCAL_API }, "Local server"));
   }
