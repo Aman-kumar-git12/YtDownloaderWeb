@@ -44,10 +44,12 @@ function findAll(obj, key, out = []) {
 function parseCount(text) {
   if (text == null) return null;
   if (/^no /i.test(String(text))) return 0;
-  const m = String(text).replace(/,/g, "").match(/([\d.]+)\s*(thousand|million|billion|[KMB])?/i);
+  // Units must stand alone: the "m" in "4 months" is not "million"
+  const m = String(text).replace(/,/g, "").match(/(\d[\d.]*)\s*(thousand|million|billion|[KMB](?![a-z]))?/i);
   if (!m) return null;
   const mult = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, b: 1e9, billion: 1e9 }[(m[2] || "").toLowerCase()] || 1;
-  return Math.round(parseFloat(m[1]) * mult);
+  const n = Math.round(parseFloat(m[1]) * mult);
+  return Number.isFinite(n) ? n : null;
 }
 
 // "4 months ago" -> unix seconds (approximate, like the backend's approximate_dates)
@@ -84,10 +86,11 @@ const DURATION_BUCKETS = [[0, 300, "Under 5 min"], [300, 900, "5–15 min"], [90
 const VERIFIED_BADGES = ["CHECK_CIRCLE_FILLED", "CHECK_CIRCLE_THICK", "AUDIO_BADGE", "OFFICIAL_ARTIST_BADGE"];
 
 function channelVideos(data) {
-  return findAll(data, "lockupViewModel").map((l) => {
+  return findAll(data, "lockupViewModel").filter((l) => !l.contentType || l.contentType === "LOCKUP_CONTENT_TYPE_VIDEO").map((l) => {
     const labels = findAll(l.metadata, "accessibilityLabel");
     const parts = findAll(l.metadata, "metadataParts").flat().map((p) => p?.text?.content).filter(Boolean);
-    const viewsText = labels.find((t) => /views?$/i.test(t)) || parts.find((t) => /views?$/i.test(t)) || parts[0];
+    // Only text that really is a view count (upcoming/live items have none and are skipped)
+    const viewsText = labels.find((t) => /views?$/i.test(t)) || parts.find((t) => /views?$/i.test(t));
     const agoText = labels.find((t) => /ago$/i.test(t)) || parts.find((t) => /ago$/i.test(t));
     const badge = findAll(l.contentImage, "thumbnailBadgeViewModel").map((b) => b.text).find((t) => clockToSeconds(t) != null);
     return {
@@ -97,12 +100,19 @@ function channelVideos(data) {
       duration: clockToSeconds(badge),
       timestamp: agoToTimestamp(agoText),
     };
-  }).filter((v) => v.id && v.views != null);
+  }).filter((v) => v.id && v.views != null && viewsTextOk(v));
 }
+
+const viewsTextOk = (v) => Number.isFinite(v.views) && v.views >= 0;
 
 function shortsViews(data) {
   return findAll(data, "shortsLockupViewModel")
-    .map((s) => parseCount((s.accessibilityText || "").match(/([\d.,]+\s*(?:thousand|million|billion)?)\s+views?/i)?.[1]))
+    .map((s) => {
+      const overlay = s.overlayMetadata?.secondaryText?.content;
+      if (overlay && /views?$/i.test(overlay)) return parseCount(overlay);
+      // Fallback: the count right before "views - play Short" at the end (not a number in the title)
+      return parseCount((s.accessibilityText || "").match(/([\d.,]+(?:\s*(?:thousand|million|billion))?|No) views? - play Short$/i)?.[1]);
+    })
     .filter((v) => v != null)
     .slice(0, 15);
 }
@@ -185,7 +195,7 @@ export async function readChannel(info) {
 
 // ─── Text tools (port of text_tools.py) ───
 
-const WORD_RE = /[\p{L}\p{M}][\p{L}\p{M}\p{N}_'’-]*/gu;
+const WORD_RE = /\p{L}[\p{L}\p{M}\p{N}_'’-]*/gu;
 const STOPWORDS = new Set(`a about above after again against all also am an and any are aren't as at be because been before being below
 between both but by can can't cannot could couldn't did didn't do does doesn't doing don't down during each few
 for from further get got had hadn't has hasn't have haven't having he he'd he'll he's her here here's hers herself
@@ -282,8 +292,8 @@ function detectLanguage(text) {
 }
 
 const short = (text, limit = 220) => {
-  const t = String(text).split(/\s+/).join(" ").trim();
-  return t.length <= limit ? t : `${t.slice(0, limit - 1).trimEnd()}…`;
+  const t = [...String(text).split(/\s+/).join(" ").trim()];
+  return t.length <= limit ? t.join("") : `${t.slice(0, limit - 1).join("").trimEnd()}…`;
 };
 
 // ─── Comments ───
@@ -295,6 +305,7 @@ function commentsFromResponse(r) {
     .filter((v) => v && typeof v === "object" && findAll(v, "pinnedText").length)
     .map((v) => v.commentKey).filter(Boolean));
   return findAll(r, "commentEntityPayload").map((p) => ({
+    key: p.key,
     text: p.properties?.content?.content || "",
     likes: parseCount(p.toolbar?.likeCountNotliked) || 0,
     author: p.author?.displayName || null,
@@ -320,24 +331,36 @@ export async function readComments(videoId, title) {
   const data = extractJson(html, "ytInitialData =") || {};
   const context = extractJson(html, '"INNERTUBE_CONTEXT":');
   const section = findAll(data, "itemSectionRenderer").find((s) => s.sectionIdentifier === "comment-item-section");
-  let token = section && findAll(section, "token")[0];
-  if (!token || !context) return { sampled: 0, total: null, from_browser: true };
+  // Page layout we don't recognise: throw so the popup falls back to the server
+  if (!context || !section) throw new Error("Couldn’t find the comments on the YouTube page.");
+  let token = findAll(section, "token")[0];
+  if (!token) return { sampled: 0, total: null, from_browser: true }; // comments are turned off
 
   const comments = [];
+  const seen = new Set();
   let total = null;
   for (let page = 0; page < 8 && token && comments.length < MAX_COMMENTS; page++) {
-    const r = await fetch("https://www.youtube.com/youtubei/v1/next?prettyPrint=false", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ context, continuation: token }),
-      signal: AbortSignal.timeout(15000),
-    }).then((res) => (res.ok ? res.json() : Promise.reject(new Error(`YouTube answered ${res.status}`))));
+    let r;
+    try {
+      r = await fetch("https://www.youtube.com/youtubei/v1/next?prettyPrint=false", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context, continuation: token }),
+        signal: AbortSignal.timeout(15000),
+      }).then((res) => (res.ok ? res.json() : Promise.reject(new Error(`YouTube answered ${res.status}`))));
+    } catch (err) {
+      if (!comments.length) throw err;
+      break; // keep the pages we already have
+    }
     if (total == null) {
       const count = findAll(r, "countText")[0];
       total = parseCount((count?.runs || []).map((x) => x.text).join("") || count?.simpleText);
     }
-    comments.push(...commentsFromResponse(r));
+    const fresh = commentsFromResponse(r).filter((c) => !seen.has(c.key || c.text));
+    if (!fresh.length) break; // YouTube is repeating itself
+    fresh.forEach((c) => seen.add(c.key || c.text));
+    comments.push(...fresh);
     token = nextToken(r);
   }
   return { ...analyseComments(comments.slice(0, MAX_COMMENTS), title), total, from_browser: true };
@@ -387,7 +410,8 @@ export function analyseTranscript(rows, info) {
   const lines = rows.map((r, i) => {
     const start = clockToSeconds(r.time) ?? 0;
     const next = rows[i + 1] ? clockToSeconds(rows[i + 1].time) : null;
-    return [start, next ?? Math.min(start + 5, info.duration || start + 5), r.text];
+    const end = Math.min(next ?? start + 5, start + 10, info.duration || Infinity);
+    return [start, Math.max(end, start), r.text];
   });
   const wordList = words(lines.map((l) => l[2]).join(" "));
   const duration = info.duration || lines.at(-1)[1];
@@ -413,7 +437,7 @@ export function analyseTranscript(rows, info) {
     pace: wpm == null ? null : wpm < 110 ? "slow" : wpm < 140 ? "relaxed" : wpm < 170 ? "conversational" : "fast",
     speech_share: duration ? Math.round((speech / duration) * 100) : null,
     keywords: topKeywords(lines.map((l) => l[2]), 15),
-    hook: hook.slice(0, 600),
+    hook: [...hook].slice(0, 600).join(""),
     title_words_in_first_minute: { found: titleWords.filter((w) => firstMinute.has(w)), total: titleWords.length },
     reading_minutes: round(wordList.length / 238, 1),
     from_browser: true,

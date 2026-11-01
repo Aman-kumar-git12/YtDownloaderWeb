@@ -77,10 +77,11 @@ function findAll(obj, key, out = []) {
 // "4.55 million subscribers", "4.55M subscribers", "812K" -> number
 function parseCount(text) {
   if (!text) return null;
-  const m = String(text).replace(/,/g, "").match(/([\d.]+)\s*(thousand|million|billion|[KMB])?/i);
+  const m = String(text).replace(/,/g, "").match(/(\d[\d.]*)\s*(thousand|million|billion|[KMB](?![a-z]))?/i);
   if (!m) return null;
   const mult = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, b: 1e9, billion: 1e9 }[(m[2] || "").toLowerCase()] || 1;
-  return Math.round(parseFloat(m[1]) * mult);
+  const n = Math.round(parseFloat(m[1]) * mult);
+  return Number.isFinite(n) ? n : null;
 }
 
 // Turns the page's data into the same "info" fields yt-dlp gives the backend
@@ -94,6 +95,11 @@ export function infoFromHtml(html, pageUrl) {
   // Likes live in different places depending on the page version; try each
   const likeText = findAll(data, "likeCountIfIndifferentNumber")[0] ?? findAll(data, "likeCount")[0]
     ?? (findAll(data, "accessibilityText").find((t) => /along with [\d,]+ other/.test(t)) || "").match(/along with ([\d,]+)/)?.[1]?.replace(/,/g, "");
+  // Comment total: shown in the header of the comments panel ("2.4M")
+  const commentText = findAll(data, "engagementPanelSectionListRenderer")
+    .filter((p) => p?.panelIdentifier === "engagement-panel-comments-section")
+    .map((p) => p.header?.engagementPanelTitleHeaderRenderer?.contextualInfo?.runs?.[0]?.text)
+    .find(Boolean);
   const subsLabel = findAll(data, "subscriberCountText")[0];
   const subscribers = parseCount(subsLabel?.simpleText || subsLabel?.accessibility?.accessibilityData?.label);
 
@@ -131,7 +137,7 @@ export function infoFromHtml(html, pageUrl) {
     duration,
     view_count: Number(vd.viewCount) || 0,
     like_count: likeText != null && likeText !== "" ? Number(likeText) : null,
-    comment_count: null,
+    comment_count: parseCount(commentText),
     channel_follower_count: subscribers,
     timestamp: Number.isNaN(published) ? null : Math.round(published / 1000),
     upload_date: (mf.publishDate || mf.uploadDate || "").slice(0, 10) || null,
@@ -289,11 +295,12 @@ function seoReport(info) {
 function engagement(info, dislikes) {
   const views = info.view_count || 0;
   const likes = info.like_count;
+  const comments = info.comment_count;
   if (!views) return null;
   const likeRate = likes != null ? likes / views : null;
   const result = {
     like_rate: likeRate != null ? round(likeRate * 100, 2) : null,
-    comment_rate: null,
+    comment_rate: comments != null ? round((comments / views) * 1000, 2) : null,
     verdict: likeRate == null ? null : likeRate >= 0.06 ? "exceptional" : likeRate >= 0.035 ? "strong" : likeRate >= 0.015 ? "typical" : "low",
   };
   if (dislikes?.dislikes != null && likes) {
@@ -381,7 +388,7 @@ export function buildParts(info, segments, dislikes) {
     duration_seconds: info.duration,
     views: info.view_count,
     likes: info.like_count,
-    comments: null,
+    comments: info.comment_count,
     description: info.description,
     chapters: info.chapters.map((c) => ({ title: c.title, start: c.start_time, end: c.end_time })),
     category: info.categories[0] || null,

@@ -1854,3 +1854,46 @@ html {
 .method sup {
   font-size: 9px;
 }
+
+/* Breakout chance: one dot per recent upload, the ones that took off in red */
+.bo-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--sheet-2);
+}
+
+.bo-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--neutral);
+}
+
+.bo-hit {
+  background: var(--pencil);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pencil) 22%, transparent);
+}
+
+.bo-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 6px 0 10px;
+  padding: 0 4px;
+}
+
+.bo-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.bo-key .bo-dot {
+  width: 8px;
+  height: 8px;
+  box-shadow: none;
+}

@@ -6,11 +6,19 @@
 // videos keep growing gets a steeper curve than one whose videos die after a week. With too few
 // uploads we fall back to the backend's generic ranges (Backend/core/insights.py → forecast()).
 // Every number is a range (low–high exponent), never a single "exact" figure.
+//
+// `extra.details` (optional) holds the page's exact like/comment counts; without them the rounded
+// rates from video.engagement are used.
 
 const DAY = 86400;
 const MILESTONES = [1e3, 1e4, 5e4, 1e5, 5e5, 1e6, 5e6, 1e7, 5e7, 1e8, 5e8, 1e9, 2e9, 5e9, 1e10];
 const MIN_FIT_VIDEOS = 6;
 const A_MIN = 0.12, A_MAX = 0.75, A_SPREAD = 0.08;
+const FIVE_YEARS = 1826;
+const BREAKOUT_X = 3; // "breakout" = at least 3× the channel's median (same rule as the channel report)
+const MIN_BREAKOUT_VIDEOS = 8;
+const MIN_MEDIAN_VIDEOS = 5;
+const SPONSOR_CPM = [10, 30]; // $ per 1,000 views for a sponsor integration (backend's sponsorship estimate)
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const median = (v) => {
@@ -19,6 +27,11 @@ const median = (v) => {
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
+const round = (v, d = 0) => Math.round(v * 10 ** d) / 10 ** d;
+const asc = ([x, y]) => (x <= y ? [x, y] : [y, x]);
+const finite = (list) => list.every(Number.isFinite);
+// A usable non-negative count (likes, comments), else null
+const count = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
 
 // Least squares on (ln age, ln views) of the channel's uploads → { a, k, r2, n }
 export function fitChannelCurve(uploads, nowSec = Date.now() / 1000) {
@@ -45,7 +58,7 @@ const viewsAt = (views, age, days, a) => views * ((age + days) / age) ** a;
 // Days from now until the curve reaches `target` views
 const daysUntil = (views, age, target, a) => age * (target / views) ** (1 / a) - age;
 
-export function buildPredictions(video, channel, nowSec = Date.now() / 1000) {
+export function buildPredictions(video, channel, nowSec = Date.now() / 1000, extra = {}) {
   const views = video?.views;
   if (!views || !video.published) return { available: false, reason: "This video is too new or has no public view count yet." };
   const age = Math.max((nowSec - video.published) / DAY, 0.5);
@@ -115,6 +128,64 @@ export function buildPredictions(video, channel, nowSec = Date.now() / 1000) {
   // Life stage: share of its first-year views it has already had
   const share = age >= 365 ? null : views / viewsAt(views, age, 365 - age, aMid);
 
+  // Likes and comments still to come: the same view gains × this video's like/comment rate
+  const details = extra?.details || null;
+  const likes = count(details?.likes), comments = count(details?.comments);
+  const likeRate = likes != null ? likes / views
+    : count(video.engagement?.like_rate) != null ? video.engagement.like_rate / 100 : null;
+  const commentRate = comments != null ? comments / views
+    : count(video.engagement?.comment_rate) != null ? video.engagement.comment_rate / 1000 : null;
+  const ahead = (rate) => (rate == null ? null : {
+    month: horizons[1].gain.map((g) => Math.round(g * rate)),
+    year: horizons[2].gain.map((g) => Math.round(g * rate)),
+  });
+  const engagementAhead = likeRate == null && commentRate == null ? null : { likes: ahead(likeRate), comments: ahead(commentRate) };
+
+  // Momentum: daily views fall like t^(a-1), so they halve once the age has grown by 2^(1/(1-a)).
+  // Days from now until today's pace has halved, and where the total stands five years from now.
+  const halfPace = (a) => age * (2 ** (1 / (1 - a)) - 1);
+  const momentum = {
+    halfPaceInDays: asc([halfPace(aLow), halfPace(aHigh)]).map((d) => round(d, 1)),
+    fiveYearTotal: asc([viewsAt(views, age, FIVE_YEARS, aLow), viewsAt(views, age, FIVE_YEARS, aHigh)]).map(Math.round),
+    slowing: age > 30,
+  };
+
+  // Breakouts: how often this channel's recent uploads reach 3× its median, and whether this one is
+  // on track to (already 3× a typical upload at its age, or projected past 3× the median within a year)
+  let breakout = null;
+  const others = uploads.filter((u) => u.id !== video.video_id && u.views > 0);
+  if (others.length >= MIN_BREAKOUT_VIDEOS) {
+    const typical = median(others.map((u) => u.views));
+    const hits = others.filter((u) => u.views >= BREAKOUT_X * typical).length;
+    const inYear = viewsAt(views, age, 365, aMid);
+    const onTrack = channel.this_video?.older_than_sample ? null
+      : Boolean((vsTypical && vsTypical.ratio >= BREAKOUT_X) || inYear >= BREAKOUT_X * typical);
+    breakout = { count: hits, of: others.length, rate: round(hits / others.length, 2), onTrack };
+  }
+
+  // The creator's next upload at 7 and 30 days old: the channel's fitted curve V = k·t^a when we
+  // have one, else its median upload (median views at median age) moved along the curve
+  let nextVideo = null;
+  let project = null, basis = null;
+  if (fitted) {
+    project = (t, a) => fit.k * t ** a;
+    basis = "fitted";
+  } else {
+    const dated = others.filter((u) => u.timestamp);
+    if (dated.length >= MIN_MEDIAN_VIDEOS) {
+      const typical = median(dated.map((u) => u.views));
+      const typicalAge = Math.max(median(dated.map((u) => (nowSec - u.timestamp) / DAY)), 1);
+      project = (t, a) => typical * (t / typicalAge) ** a;
+      basis = "median";
+    }
+  }
+  if (project) {
+    const at = (t) => asc([project(t, aLow), project(t, aHigh)]).map(Math.round);
+    const views7 = at(7), views30 = at(30);
+    const sponsor = [Math.round((views30[0] / 1000) * SPONSOR_CPM[0]), Math.round((views30[1] / 1000) * SPONSOR_CPM[1])];
+    if (finite([...views7, ...views30, ...sponsor])) nextVideo = { views7, views30, sponsor, basis };
+  }
+
   return {
     available: true,
     age,
@@ -129,5 +200,9 @@ export function buildPredictions(video, channel, nowSec = Date.now() / 1000) {
     nextUpload,
     firstYearShare: share,
     curve: { aLow, aHigh, aMid },
+    engagementAhead,
+    momentum,
+    breakout,
+    nextVideo,
   };
 }

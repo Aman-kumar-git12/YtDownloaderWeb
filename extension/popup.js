@@ -906,6 +906,23 @@ const years = (days) => (days >= 730 ? `${(days / 365).toFixed(1)} years` : days
 const whenRange = ([fast, slow]) => (Math.abs(slow - fast) < 1 ? `in about ${years(fast)}` : `in ${years(fast)} – ${years(slow)}`);
 const dateIn = (days) => new Date(Date.now() + days * 864e5).toLocaleDateString(undefined, { month: "short", year: "numeric", ...(days < 120 ? { day: "numeric" } : {}) });
 const plus = ([a, b]) => `+${compact(a)} – ${compact(b)}`;
+const between = ([a, b]) => `${compact(a)} – ${compact(b)}`;
+// A usable [low, high] pair: the newer prediction fields can be missing or partial
+const isRange = (r) => Array.isArray(r) && r.length === 2 && r.every(Number.isFinite);
+
+// Breakout chance: one dot per recent upload (at most 30), the ones that took off filled in
+function breakoutDots(b) {
+  const n = Math.min(b.of, 30);
+  const hits = Math.round((b.count / b.of) * n);
+  return [
+    h("div", { class: "bo-dots", role: "img", "aria-label": `${b.count} of the channel’s last ${b.of} uploads took off` },
+      Array.from({ length: n }, (_, i) => h("span", { class: `bo-dot${i < hits ? " bo-hit" : ""}` }))),
+    h("p", { class: "bo-key muted small" },
+      h("span", {}, h("i", { class: "bo-dot bo-hit", "aria-hidden": "true" }), "Took off"),
+      h("span", {}, h("i", { class: "bo-dot", "aria-hidden": "true" }), "Usual"),
+      b.of > 30 && h("span", {}, `(${b.of} uploads, scaled to 30 dots)`)),
+  ];
+}
 
 // Past views (solid), the predicted range for the next year (shaded) and the middle path (dashed)
 function projectionChart(p) {
@@ -954,6 +971,23 @@ function predictionsPanel() {
       ]),
     ]), "estimate"),
 
+    card("Momentum", "predict", (p) => needs(p, () => {
+      const m = p.momentum;
+      const half = isRange(m?.halfPaceInDays), total = isRange(m?.fiveYearTotal);
+      if (!half && !total) return h("p", { class: "muted" }, "Not enough data on this video to judge how fast it’s slowing.");
+      return [
+        origin("How fast this video is slowing down."),
+        typeof m.slowing === "boolean" && (m.slowing
+          ? h("p", { class: "verdict verdict-mid" }, "Past its launch burst — growing slowly now")
+          : h("p", { class: "verdict verdict-good" }, "Still in its launch burst — most views are yet to come")),
+        facts([
+          // Beyond 10 years the curve is effectively flat; say so instead of "in 26–51 years"
+          half && ["Daily views halve", m.halfPaceInDays[0] > 3650 ? "Not for 10+ years (steady)" : whenRange(m.halfPaceInDays), null, m.halfPaceInDays[1] <= 36500 ? `Around ${dateIn(m.halfPaceInDays[0])}${Math.abs(m.halfPaceInDays[1] - m.halfPaceInDays[0]) > 30 ? ` – ${dateIn(m.halfPaceInDays[1])}` : ""}` : null],
+          total && ["5-year total", between(m.fiveYearTotal), null, "Lifetime views 5 years from now"],
+        ]),
+      ];
+    }), "estimate"),
+
     card("Next milestones", "predict", (p) => needs(p, () => [
       origin("When it should pass the next round numbers."),
       p.milestones.length
@@ -980,11 +1014,39 @@ function predictionsPanel() {
       ];
     }), "estimate"),
 
+    card("Breakout chance", "predict", (p) => needs(p, () => {
+      const b = p.breakout;
+      if (!(Number.isFinite(b?.of) && b.of > 0 && Number.isFinite(b.count))) return h("p", { class: "muted" }, "Not enough recent uploads on this channel to predict this.");
+      const rate = Number.isFinite(b.rate) ? b.rate : b.count / b.of;
+      return [
+        origin("How often this channel’s uploads take off (3× their usual views)."),
+        breakoutDots(b),
+        facts([
+          ["Channel’s hit rate", `${b.count} of ${b.of} (${Math.round(rate * 100)}%)`, null, "Recent uploads that reached 3× the channel’s median views"],
+          b.onTrack === true ? ["This video", "On track to be a hit", "good"]
+            : b.onTrack === false ? ["This video", "Not on track yet"]
+              : ["This video", "Too old to compare"],
+        ]),
+      ];
+    }), "estimate"),
+
     card("Money ahead", "predict", (p) => needs(p, () =>
       p.earnings
         ? [origin("Ad earnings from the predicted views, at this video’s estimated rate."),
             facts([["Next 30 days", range(p.earnings.month)], ["Next year", range(p.earnings.year)]])]
         : h("p", { class: "muted" }, "The channel probably can’t run ads yet, so no ad earnings are expected.")), "estimate"),
+
+    card("Likes & comments ahead", "predict", (p) => needs(p, () => {
+      const e = p.engagementAhead;
+      const rows = [
+        isRange(e?.likes?.month) && ["Likes, next 30 days", plus(e.likes.month)],
+        isRange(e?.likes?.year) && ["Likes, next year", plus(e.likes.year)],
+        isRange(e?.comments?.month) && ["Comments, next 30 days", plus(e.comments.month)],
+        isRange(e?.comments?.year) && ["Comments, next year", plus(e.comments.year)],
+      ].filter(Boolean);
+      if (!rows.length) return h("p", { class: "muted" }, "Not enough like or comment data on this video to predict this.");
+      return [origin("At this video’s current like and comment rates."), facts(rows)];
+    }), "estimate"),
 
     card("Creator’s next upload", "predict", (p) => needs(p, () => {
       const n = p.nextUpload;
@@ -997,6 +1059,22 @@ function predictionsPanel() {
           [overdue ? "Overdue by" : "Next upload expected", overdue ? years(-n.dueInDays) : `in ~${years(n.dueInDays)}`, overdue ? "warn" : null],
           !overdue && ["Around", dateIn(n.dueInDays)],
         ]),
+      ];
+    }), "estimate"),
+
+    card("Next video forecast", "predict", (p) => needs(p, () => {
+      const n = p.nextVideo;
+      const rows = [
+        isRange(n?.views7) && ["Views after 7 days", between(n.views7)],
+        isRange(n?.views30) && ["Views after 30 days", between(n.views30)],
+        isRange(n?.sponsor) && ["Fair sponsor price", range(n.sponsor), null, "Typical brand rate of $10–$30 per 1,000 expected views"],
+      ].filter(Boolean);
+      if (!rows.length) return h("p", { class: "muted" }, "Not enough data on this channel to predict this.");
+      return [
+        origin(n.basis === "fitted"
+          ? "From this channel’s growth curve — useful for planning or pricing a sponsorship."
+          : "From this channel’s typical recent upload — useful for planning or pricing a sponsorship."),
+        facts(rows),
       ];
     }), "estimate"),
 
@@ -1144,7 +1222,8 @@ async function main() {
   sources.predict = async () => {
     const video = await loadPart("video");
     const channel = await waitFor("channel").catch(() => null);
-    return buildPredictions(video, channel);
+    const details = await waitFor("details").catch(() => null);
+    return buildPredictions(video, channel, undefined, { details });
   };
   const panels = {
     analytics: analyticsPanel(tab.id), details: detailsPanel(tab.id), hidden: hiddenPanel(tab.id, videoId), predictions: predictionsPanel(),

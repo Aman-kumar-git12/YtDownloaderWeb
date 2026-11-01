@@ -31,6 +31,8 @@ async function pingIfDue(every) {
     const { lastPing = 0 } = await chrome.storage.local.get("lastPing");
     if (Date.now() - lastPing < every - SLACK) return;
     await chrome.storage.local.set({ lastPing: Date.now() });
+    // Restart the 10-minute timer from this ping, so a ping between alarms can't leave a ~20-minute gap
+    chrome.alarms.create("ping", { periodInMinutes: 10 });
     await fetch(`${DEPLOYED_API}/health`, { cache: "no-store" });
   } catch {
     // offline or server unreachable; the popup shows its own message
