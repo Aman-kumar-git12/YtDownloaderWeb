@@ -736,6 +736,7 @@ const origin = (text) => h("p", { class: "origin" }, text);
 function hiddenPanel(tabId, videoId) {
   return h("div", { class: "panel", id: "panel-hidden", role: "tabpanel", "aria-labelledby": "tab-hidden", hidden: "" },
     h("p", { class: "panel-intro" }, icon("eye"), "Things YouTube knows about this video but doesn’t show you."),
+    autoSkipCard(tabId),
     h("div", { class: "legend-keys small" },
       h("span", {}, h("i", { class: "src src-real" }), "Real data"),
       h("span", {}, h("i", { class: "src src-est" }), "Estimate"),
@@ -1171,7 +1172,79 @@ function emptyState() {
     h("p", { class: "muted" }, "Go to any YouTube video, then click Viewlens to see its earnings estimate, best moments and more."));
 }
 
-// ─── skip ad ───
+// ─── auto-skip ───
+// content.js skips ads and SponsorBlock parts on every YouTube page by itself. The popup only
+// shows and changes its settings (chrome.storage.local) and the running totals it keeps.
+
+const SKIP_DEFAULTS = { autoSkipAds: true, autoSkipSponsors: true, skippedAds: 0, skippedSeconds: 0 };
+const skipState = { ...SKIP_DEFAULTS };
+const skipViews = new Set(); // redraw functions for every switch / stats line on screen
+const skipChanged = () => skipViews.forEach((fn) => fn());
+
+function readSkip(values) {
+  for (const [key, fallback] of Object.entries(SKIP_DEFAULTS)) {
+    const v = values[key];
+    skipState[key] = typeof fallback === "boolean" ? v !== false : Number.isFinite(v) ? v : fallback;
+  }
+  skipChanged();
+}
+
+async function loadSkip() {
+  try {
+    readSkip(await chrome.storage.local.get(Object.keys(SKIP_DEFAULTS)));
+  } catch {
+    // storage unavailable: keep the defaults (auto-skip on)
+  }
+  // Live: the counters go up while the popup is open, and the settings can change elsewhere
+  chrome.storage.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !Object.keys(SKIP_DEFAULTS).some((k) => k in changes)) return;
+    readSkip({ ...skipState, ...Object.fromEntries(Object.entries(changes).map(([k, c]) => [k, c.newValue])) });
+  });
+}
+
+function setSkip(patch) {
+  Object.assign(skipState, patch);
+  skipChanged();
+  chrome.storage.local.set(patch).catch(() => toast("Couldn’t save the setting. Try again.", "warn"));
+}
+
+function skipOption(key, title, about) {
+  const id = `opt-${key}`;
+  const el = h("button", { type: "button", class: "skip-opt", role: "switch", "aria-labelledby": `${id}-t`, "aria-describedby": `${id}-d`, onclick: () => setSkip({ [key]: !skipState[key] }) },
+    h("span", { class: "skip-opt-text" }, h("strong", { id: `${id}-t` }, title), h("span", { class: "group-about", id: `${id}-d` }, about)),
+    h("span", { class: "switch", "aria-hidden": "true" }));
+  skipViews.add(() => el.setAttribute("aria-checked", String(skipState[key])));
+  return el;
+}
+
+function skippedMinutes(seconds) {
+  if (seconds > 0 && seconds < 30) return "under 1 min";
+  return `${Math.round(seconds / 60).toLocaleString()} min`;
+}
+
+function autoSkipCard(tabId) {
+  const stats = h("p", { class: "skip-stats small" });
+  const drawStats = () => {
+    const n = skipState.skippedAds;
+    stats.replaceChildren(icon("check"), "Skipped so far: ",
+      h("strong", { class: "num" }, `${n.toLocaleString()} ${n === 1 ? "ad" : "ads"}`), " · ",
+      h("strong", { class: "num" }, skippedMinutes(skipState.skippedSeconds)), " of sponsor parts");
+  };
+  skipViews.add(drawStats);
+  const el = h("section", { class: "card skip-card" },
+    h("div", { class: "card-head" },
+      h("h2", {}, "Auto-skip"),
+      h("button", { type: "button", class: "skip-now", disabled: !VIDEO_URL.test(currentUrl), title: "Put a Skip button on the video", onclick: () => addSkipButton(tabId) },
+        icon("skip"), "Skip button")),
+    origin("Works on every YouTube page, even with this popup closed."),
+    skipOption("autoSkipAds", "YouTube ads", "Mutes and fast-forwards ads, presses Skip as soon as it appears"),
+    skipOption("autoSkipSponsors", "Sponsor parts", "Jumps past sponsor reads, self-promotion and subscribe reminders (from SponsorBlock)"),
+    stats);
+  skipChanged();
+  return el;
+}
+
+// ─── Skip now: the manual fallback (for when auto-skip is off) ───
 
 // Runs inside the YouTube page, so it must be self-contained.
 // 1. A YouTube ad is playing: press YouTube's own Skip button, or jump to the end of an ad that can't be skipped yet.
@@ -1227,6 +1300,24 @@ async function skipNow(tabId) {
     : "No ad or sponsor part to skip right now.", null);
 }
 
+// ─── skip ad: puts a Skip button on the YouTube video itself (handled by content.js) ───
+
+async function addSkipButton(tabId) {
+  const ask = () => chrome.tabs.sendMessage(tabId, { type: "showSkipButton" });
+  try {
+    await ask();
+  } catch {
+    // The tab was open before Viewlens was (re)loaded, so content.js isn't in it yet: add it now
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+      await ask();
+    } catch {
+      return skipNow(tabId); // last resort: skip once from the popup
+    }
+  }
+  toast("Skip button added to the video (top right). Click it whenever an ad or sponsor part plays.", "good");
+}
+
 // A short message at the bottom of the popup
 function toast(text, tone) {
   document.querySelector(".toast")?.remove();
@@ -1239,6 +1330,8 @@ function toast(text, tone) {
 async function main() {
   document.getElementById("refresh").append(icon("refresh"));
   document.getElementById("refresh").addEventListener("click", () => location.reload());
+
+  loadSkip(); // auto-skip settings and totals for the Hidden tab card
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab?.url || "";
@@ -1253,11 +1346,11 @@ async function main() {
     chrome.tabs.create({ url: dwnld.href });
   });
 
-  // skip ad: works on any YouTube video page (ads also play before the popup's data has loaded)
+  // skip ad: put a Skip button on the video (works as soon as you're on a YouTube video page)
   const skip = document.getElementById("skip");
   skip.querySelector(".skip-icon").append(icon("skip"));
   skip.disabled = !onVideo;
-  skip.addEventListener("click", () => skipNow(tab.id));
+  skip.addEventListener("click", () => addSkipButton(tab.id));
 
   if (!onVideo) {
     app.replaceChildren(emptyState());

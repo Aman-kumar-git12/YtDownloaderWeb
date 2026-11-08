@@ -32,11 +32,12 @@ Viewlens opens as a small popup on any YouTube video. It has four tabs:
 | --- | --- |
 | **Analytics** | What stands out, estimated earnings, most-replayed moments (click to jump), channel comparison, engagement, search score, comment mood, transcript topics |
 | **Details** | Exact views, likes, comments, upload date, quality, description, chapters, tags, caption languages |
-| **Hidden** | Things YouTube knows but doesn't show: loudness, planned ad breaks, paid promotion, exact upload time, stream quality, sponsor segments, estimated dislikes |
+| **Hidden** | Auto-skip settings, then things YouTube knows but doesn't show: loudness, planned ad breaks, paid promotion, exact upload time, stream quality, sponsor segments, estimated dislikes |
 | **Predictions** | Views in 7 days / 30 days / 1 year, next milestones, breakout chance, earnings ahead, the creator's next upload and a fair sponsor price |
 
-Two buttons sit at the top right:
-- **skip ad** skips the YouTube ad that's playing (presses YouTube's Skip button, or jumps to the end of an ad that can't be skipped yet). With no ad playing, it jumps past the sponsor read, intro or "subscribe" reminder the video is in (from SponsorBlock).
+Two controls sit at the top right:
+- **skip ad** puts a **Skip** button directly on the YouTube video (top right of the player). Click it during an ad to mute, fast-forward and skip it, or during a sponsor read, self-promotion or "subscribe" reminder (from SponsorBlock) to jump past it. **×** removes it.
+- **Auto-skip** (in the **Hidden** tab, on by default) does the same automatically, with separate switches for ads and sponsor parts and a count of what's been skipped.
 - **dwnld** opens the website with the current video filled in.
 
 ### Install it (free)
@@ -76,6 +77,7 @@ Every number in the app is labelled **Real data** or **Estimate**.
 │   └── api.js            # Calls to the backend
 ├── extension/            # Viewlens Chrome extension (no build step)
 │   ├── popup.html/js/css # The popup and its four tabs
+│   ├── content.js        # Auto-skips ads and sponsor parts on YouTube pages
 │   ├── background.js     # Keeps the server awake while you're on YouTube
 │   ├── lib/              # Reads YouTube, calculates insights and predictions
 │   ├── PRIVACY.md        # What the extension reads and sends

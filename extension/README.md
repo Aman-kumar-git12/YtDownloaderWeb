@@ -5,6 +5,13 @@ with the thumbnail, title and three key numbers (estimated earnings, views vs th
 then four tabs: **Analytics**, **Details**, **Hidden** and **Predictions**. The refresh button analyses the
 video again.
 
+The **skip ad** button (top right) adds a **Skip** button on the video player itself; clicking it skips the ad or
+sponsor part that's playing. **Auto-skip** (Hidden tab, on by default) does it automatically on every YouTube page,
+even with the popup closed. `content.js` runs on youtube.com and, while an ad plays, mutes it, fast-forwards it and presses
+YouTube's Skip button as soon as it appears; it also jumps past sponsor reads, self-promotion and "subscribe"
+reminders marked on SponsorBlock (fetched through `background.js`). The Hidden tab has a switch for each. Settings and totals live in `chrome.storage.local`: `autoSkipAds`,
+`autoSkipSponsors` (both default `true`), `skippedAds` and `skippedSeconds`.
+
 The **dwnld** button (top right) opens the Viewlens website with the current video filled in. Because it links to
 a downloader, the extension is distributed through GitHub Releases rather than the Chrome Web Store.
 
@@ -43,7 +50,10 @@ clickable chapters; tags; and caption languages.
 
 ## Hidden tab
 
-What YouTube knows but doesn't show:
+Starts with the **Auto-skip** card: switches for **YouTube ads** and **Sponsor parts**, a live "Skipped so far"
+count (ads and minutes of sponsor parts), and a **Skip button** shortcut that adds the on-video Skip button.
+
+Then what YouTube knows but doesn't show:
 - **Behind the player** (read from the YouTube tab's own player data): loudness normalisation, planned ad
   breaks (clickable), paid-promotion flag, unlisted / in search / embeds / family-safe / likes shown / allowed
   countries, exact upload time, hidden tag count, end screen, info cards and captions.
@@ -111,6 +121,9 @@ you change it, change `host_permissions` in `manifest.json` too.
 
 The free server sleeps when idle, so `background.js` pings its `/health` endpoint every 10 minutes while you're
 on a YouTube tab or a YouTube video is playing, and once an hour otherwise. It stores only the last ping time.
+
+Auto-skip's sponsor segments come from SponsorBlock: `content.js` sends the video ID to `background.js`, which
+asks SponsorBlock and returns the segments.
 
 ## Build the zip
 

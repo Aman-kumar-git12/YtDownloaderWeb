@@ -68,3 +68,50 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     // tab closed
   }
 });
+
+// Sponsor segments for content.js (auto-skip). Asked as { type: "segments", videoId }.
+// Replies with [{ category, start, end }], [] when SponsorBlock has nothing, or null on error.
+const SEGMENT_CATEGORIES = ["sponsor", "selfpromo", "interaction"];
+const SEGMENT_CACHE_MS = 30 * MINUTE;
+const segmentCache = new Map(); // videoId -> { time, segments }
+
+async function fetchSegments(videoId) {
+  const cached = segmentCache.get(videoId);
+  if (cached && Date.now() - cached.time < SEGMENT_CACHE_MS) return cached.segments;
+  try {
+    const url = `https://sponsor.ajay.app/api/skipSegments?videoID=${encodeURIComponent(videoId)}`
+      + `&categories=${encodeURIComponent(JSON.stringify(SEGMENT_CATEGORIES))}`;
+    const res = await fetch(url);
+    let segments;
+    if (res.status === 404) {
+      segments = [];
+    } else if (!res.ok) {
+      return null;
+    } else {
+      const data = await res.json();
+      segments = (Array.isArray(data) ? data : [])
+        .filter((s) => Array.isArray(s?.segment) && SEGMENT_CATEGORIES.includes(s.category)
+          && (!s.actionType || s.actionType === "skip"))
+        .map((s) => ({ category: s.category, start: Number(s.segment[0]), end: Number(s.segment[1]) }))
+        .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start);
+    }
+    segmentCache.set(videoId, { time: Date.now(), segments });
+    for (const [id, entry] of segmentCache) {
+      if (Date.now() - entry.time >= SEGMENT_CACHE_MS) segmentCache.delete(id);
+    }
+    return segments;
+  } catch {
+    return null;
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== "segments" || sender.id !== chrome.runtime.id) return;
+  const videoId = String(msg.videoId || "");
+  if (!/^[\w-]{11}$/.test(videoId)) {
+    sendResponse(null);
+    return;
+  }
+  fetchSegments(videoId).then(sendResponse, () => sendResponse(null));
+  return true;
+});
