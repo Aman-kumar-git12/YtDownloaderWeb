@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Viewlens – video insights",
   "short_name": "Viewlens",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "See estimated earnings, the most replayed moments, channel comparisons and comment mood for the video you're watching.",
   "action": {
     "default_popup": "popup.html",

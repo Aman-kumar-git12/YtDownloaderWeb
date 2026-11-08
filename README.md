@@ -35,7 +35,9 @@ Viewlens opens as a small popup on any YouTube video. It has four tabs:
 | **Hidden** | Things YouTube knows but doesn't show: loudness, planned ad breaks, paid promotion, exact upload time, stream quality, sponsor segments, estimated dislikes |
 | **Predictions** | Views in 7 days / 30 days / 1 year, next milestones, breakout chance, earnings ahead, the creator's next upload and a fair sponsor price |
 
-The **dwnld** button (top right) opens the website with the current video filled in.
+Two buttons sit at the top right:
+- **skip ad** skips the YouTube ad that's playing (presses YouTube's Skip button, or jumps to the end of an ad that can't be skipped yet). With no ad playing, it jumps past the sponsor read, intro or "subscribe" reminder the video is in (from SponsorBlock).
+- **dwnld** opens the website with the current video filled in.
 
 ### Install it (free)
 

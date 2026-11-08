@@ -1171,6 +1171,71 @@ function emptyState() {
     h("p", { class: "muted" }, "Go to any YouTube video, then click Viewlens to see its earnings estimate, best moments and more."));
 }
 
+// ─── skip ad ───
+
+// Runs inside the YouTube page, so it must be self-contained.
+// 1. A YouTube ad is playing: press YouTube's own Skip button, or jump to the end of an ad that can't be skipped yet.
+// 2. Otherwise: jump past the sponsor read / intro / reminder the video is in right now (SponsorBlock segments).
+function skipInPage(segments) {
+  const player = document.querySelector("#movie_player");
+  const video = player?.querySelector("video") || document.querySelector("video");
+  if (!video) return { did: "no-video" };
+
+  if (player?.classList.contains("ad-showing") || player?.classList.contains("ad-interrupting")) {
+    const button = document.querySelector(".ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button, button[id^='skip-button']");
+    if (button) {
+      button.click();
+      return { did: "ad-skipped" };
+    }
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      video.currentTime = video.duration;
+      return { did: "ad-ended" };
+    }
+    return { did: "ad-wait" };
+  }
+
+  const t = video.currentTime;
+  const now = segments.find((s) => t >= s.start - 0.5 && t < s.end - 0.3);
+  if (now) {
+    video.currentTime = now.end;
+    if (video.paused) video.play();
+    return { did: "segment", label: now.label, seconds: Math.round(now.end - Math.max(t, now.start)) };
+  }
+  const next = segments.filter((s) => s.start > t).sort((a, b) => a.start - b.start)[0];
+  return { did: "nothing", next: next ? { label: next.label, start: next.start } : null };
+}
+
+async function skipNow(tabId) {
+  const segments = (partData.video?.sponsor_segments || []).filter((s) => s.end > s.start);
+  let result;
+  try {
+    [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: skipInPage, args: [segments] });
+  } catch {
+    return toast("Couldn’t reach the video. Reload the YouTube tab and try again.", "warn");
+  }
+  const messages = {
+    "ad-skipped": ["Ad skipped", "good"],
+    "ad-ended": ["Ad skipped to its end", "good"],
+    "ad-wait": ["The ad is still loading. Try again in a second.", null],
+    "no-video": ["No video is playing on this page.", "warn"],
+  };
+  if (messages[result?.did]) return toast(...messages[result.did]);
+  if (result?.did === "segment") return toast(`Skipped ${result.label.toLowerCase()} (${result.seconds}s)`, "good");
+  if (!partData.video) return toast("No ad playing. Sponsor parts will be skippable once the video is analysed.", null);
+  return toast(result?.next
+    ? `No ad playing. Next: ${result.next.label.toLowerCase()} at ${clock(result.next.start)}`
+    : "No ad or sponsor part to skip right now.", null);
+}
+
+// A short message at the bottom of the popup
+function toast(text, tone) {
+  document.querySelector(".toast")?.remove();
+  const el = h("div", { class: `toast${tone ? ` toast-${tone}` : ""}`, role: "status" }, tone === "good" && icon("check"), text);
+  document.body.append(el);
+  setTimeout(() => el.classList.add("toast-out"), 2600);
+  setTimeout(() => el.remove(), 3000);
+}
+
 async function main() {
   document.getElementById("refresh").append(icon("refresh"));
   document.getElementById("refresh").addEventListener("click", () => location.reload());
@@ -1187,6 +1252,12 @@ async function main() {
     e.preventDefault();
     chrome.tabs.create({ url: dwnld.href });
   });
+
+  // skip ad: works on any YouTube video page (ads also play before the popup's data has loaded)
+  const skip = document.getElementById("skip");
+  skip.querySelector(".skip-icon").append(icon("skip"));
+  skip.disabled = !onVideo;
+  skip.addEventListener("click", () => skipNow(tab.id));
 
   if (!onVideo) {
     app.replaceChildren(emptyState());
